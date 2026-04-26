@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#79c8ff"/>
+      <stop offset="1" stop-color="#3a78b6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="72" ry="72" fill="url(#sky)"/>
+  <!-- ground row of grass cubes -->
+  <g transform="translate(40,150)">
+    <!-- cube 1 -->
+    <g transform="translate(0,80)">
+      <polygon points="0,40 70,0 140,40 70,80" fill="#7CBA47" stroke="#000" stroke-width="4"/>
+      <polygon points="0,40 70,80 70,160 0,120" fill="#8B6F47" stroke="#000" stroke-width="4"/>
+      <polygon points="140,40 70,80 70,160 140,120" fill="#6B4D2E" stroke="#000" stroke-width="4"/>
+    </g>
+    <!-- cube 2 -->
+    <g transform="translate(140,80)">
+      <polygon points="0,40 70,0 140,40 70,80" fill="#7CBA47" stroke="#000" stroke-width="4"/>
+      <polygon points="0,40 70,80 70,160 0,120" fill="#8B6F47" stroke="#000" stroke-width="4"/>
+      <polygon points="140,40 70,80 70,160 140,120" fill="#6B4D2E" stroke="#000" stroke-width="4"/>
+    </g>
+    <!-- cube 3 -->
+    <g transform="translate(280,80)">
+      <polygon points="0,40 70,0 140,40 70,80" fill="#7CBA47" stroke="#000" stroke-width="4"/>
+      <polygon points="0,40 70,80 70,160 0,120" fill="#8B6F47" stroke="#000" stroke-width="4"/>
+      <polygon points="140,40 70,80 70,160 140,120" fill="#6B4D2E" stroke="#000" stroke-width="4"/>
+    </g>
+    <!-- redstone source on top -->
+    <g transform="translate(140,0)">
+      <polygon points="0,40 70,0 140,40 70,80" fill="#FF3535" stroke="#000" stroke-width="4"/>
+      <polygon points="0,40 70,80 70,160 0,120" fill="#9C2222" stroke="#000" stroke-width="4"/>
+      <polygon points="140,40 70,80 70,160 140,120" fill="#6B1818" stroke="#000" stroke-width="4"/>
+    </g>
+  </g>
+  <!-- title -->
+  <g font-family="monospace" font-weight="700" fill="#fff" stroke="#000" stroke-width="4" paint-order="stroke">
+    <text x="256" y="450" font-size="64" text-anchor="middle">DgmCraft</text>
+  </g>
+</svg>
