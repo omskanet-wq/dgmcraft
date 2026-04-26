@@ -708,6 +708,26 @@
         #inventory-craft-result-wrap .inventory-slot {
             outline: 2px solid #555;
         }
+        #inventory-armor-wrap {
+            display: flex;
+            align-items: center;
+            margin-right: 18px;
+            font-family: 'Press Start 2P', monospace;
+        }
+        #inventory-armor-wrap .armor-label {
+            font-size: 8px;
+            color: #404040;
+            margin-right: 6px;
+        }
+        #inventory-armor-slots {
+            display: grid;
+            grid-template-columns: 44px;
+            gap: 2px;
+        }
+        #inventory-armor-slots .inventory-slot {
+            outline: 2px solid #777;
+            background: #2a2a2a;
+        }
 
         #inventory-creative-search-wrap { display: none; margin-bottom: 8px; }
         #inventory-creative-search {
@@ -1223,6 +1243,10 @@
     <div id="inventory-container">
         <div id="inventory-top">
             <h2 id="inventory-title">Inventory</h2>
+            <div id="inventory-armor-wrap">
+                <span class="armor-label">Броня</span>
+                <div id="inventory-armor-slots"></div>
+            </div>
             <div id="inventory-craft-wrap">
                 <span class="craft-label">Крафт</span>
                 <div id="inventory-craft-grid"></div>
@@ -1670,6 +1694,10 @@
     // 2×2 crafting grid + result slot inside the inventory screen.
     let CRAFT_GRID = Array.from({length: 4}, () => ({type: null, count: 0, durability: null}));
     let CRAFT_RESULT = {type: null, count: 0, durability: null};
+    // Equipped armour: indices 0..3 = helmet, chestplate, leggings, boots.
+    // Each slot accepts only the matching armour piece. Damage taken by the
+    // player is reduced according to the sum of equipped pieces.
+    let ARMOR_SLOTS = Array.from({length: 4}, () => ({type: null, count: 0, durability: null}));
     // Cursor-held stack while the inventory is open (Minecraft-style).
     let CURSOR_STACK = {type: null, count: 0, durability: null};
 
@@ -3154,7 +3182,52 @@
         if (group === 'main')   return INV_ITEMS[idx];
         if (group === 'craft')  return CRAFT_GRID[idx];
         if (group === 'result') return CRAFT_RESULT;
+        if (group === 'armor')  return ARMOR_SLOTS[idx];
         return null;
+    }
+
+    // Armour metadata is filled lazily once the ITEM_HELM_* constants exist.
+    // We cannot capture them at this scope position because they're declared
+    // further down the script (TDZ).
+    let _ARMOR_DEFENSE = null;
+    let _ARMOR_SLOT_BY_ITEM = null;
+    function ensureArmorMeta() {
+        if (_ARMOR_DEFENSE) return;
+        // Bail out early if the armour ITEM_* constants haven't been
+        // initialised yet (the script is still parsing top-level decls).
+        try { void ITEM_HELM_IRON; } catch { return; }
+        _ARMOR_SLOT_BY_ITEM = {};
+        _ARMOR_SLOT_BY_ITEM[ITEM_HELM_IRON]  = 0; _ARMOR_SLOT_BY_ITEM[ITEM_HELM_DIA]  = 0;
+        _ARMOR_SLOT_BY_ITEM[ITEM_CHEST_IRON] = 1; _ARMOR_SLOT_BY_ITEM[ITEM_CHEST_DIA] = 1;
+        _ARMOR_SLOT_BY_ITEM[ITEM_LEGS_IRON]  = 2; _ARMOR_SLOT_BY_ITEM[ITEM_LEGS_DIA]  = 2;
+        _ARMOR_SLOT_BY_ITEM[ITEM_BOOTS_IRON] = 3; _ARMOR_SLOT_BY_ITEM[ITEM_BOOTS_DIA] = 3;
+        _ARMOR_DEFENSE = {};
+        _ARMOR_DEFENSE[ITEM_HELM_IRON]  = 2; _ARMOR_DEFENSE[ITEM_CHEST_IRON] = 6;
+        _ARMOR_DEFENSE[ITEM_LEGS_IRON]  = 5; _ARMOR_DEFENSE[ITEM_BOOTS_IRON] = 2;
+        _ARMOR_DEFENSE[ITEM_HELM_DIA]   = 3; _ARMOR_DEFENSE[ITEM_CHEST_DIA]  = 8;
+        _ARMOR_DEFENSE[ITEM_LEGS_DIA]   = 6; _ARMOR_DEFENSE[ITEM_BOOTS_DIA]  = 3;
+    }
+    function armorSlotIndex(itemId) {
+        ensureArmorMeta();
+        if (!_ARMOR_SLOT_BY_ITEM) return -1;
+        const v = _ARMOR_SLOT_BY_ITEM[itemId];
+        return (v == null) ? -1 : v;
+    }
+    function totalArmorDefense() {
+        ensureArmorMeta();
+        if (!_ARMOR_DEFENSE) return 0;
+        let total = 0;
+        for (const s of ARMOR_SLOTS) {
+            if (s && s.type && _ARMOR_DEFENSE[s.type]) total += _ARMOR_DEFENSE[s.type];
+        }
+        return total;
+    }
+    // Reduce incoming damage by ~4 % per defense point, capped at 80 %.
+    function reduceDamageByArmor(rawDmg) {
+        const def = totalArmorDefense();
+        if (def <= 0) return rawDmg;
+        const factor = Math.max(0.20, 1 - def * 0.04);
+        return Math.max(0, Math.floor(rawDmg * factor));
     }
 
     function clearSlot(slot) { slot.type = null; slot.count = 0; slot.durability = null; }
@@ -3403,6 +3476,22 @@
         if (isEmpty(slot)) return;
         const def = isItemId(slot.type) ? getItemDef(slot.type) : null;
         const isTool = def && def.kind === 'tool';
+        // Shift-clicking armour from hotbar/main → equip into matching armour slot.
+        if (group !== 'armor' && group !== 'result') {
+            const aSlot = armorSlotIndex(slot.type);
+            if (aSlot >= 0 && isEmpty(ARMOR_SLOTS[aSlot])) {
+                copySlot(slot, ARMOR_SLOTS[aSlot]);
+                clearSlot(slot);
+                return;
+            }
+        }
+        // Shift-clicking equipped armour → push back to hotbar/inventory.
+        if (group === 'armor') {
+            for (const t of HOTBAR_ITEMS.concat(INV_ITEMS)) {
+                if (!t.type) { copySlot(slot, t); clearSlot(slot); return; }
+            }
+            return;
+        }
         const dest = (group === 'hotbar') ? 'main' : 'hotbar';
         const target = (dest === 'hotbar') ? HOTBAR_ITEMS : INV_ITEMS;
         if (group === 'result') {
@@ -3476,10 +3565,19 @@
 
     function attachSlotHandlers(slotEl, group, idx) {
         const isResult = (group === 'result');
+        const isArmor  = (group === 'armor');
         slotEl.addEventListener('mousedown', (e) => {
             e.preventDefault();
             e.stopPropagation();
             const ref = getSlotRef(group, idx);
+            // Reject placing the wrong armour piece into an armour slot.
+            if (isArmor && !isEmpty(CURSOR_STACK)) {
+                const wantSlot = armorSlotIndex(CURSOR_STACK.type);
+                if (wantSlot !== idx) {
+                    if (typeof audio !== 'undefined' && audio.uiClick) audio.uiClick();
+                    return;
+                }
+            }
             if (e.shiftKey) {
                 slotShiftClick(group, idx);
             } else if (e.button === 0) {
@@ -3535,11 +3633,24 @@
         const hot  = document.getElementById('inventory-hotbar');
         const craft = document.getElementById('inventory-craft-grid');
         const resultWrap = document.getElementById('inventory-craft-result-wrap');
+        const armor = document.getElementById('inventory-armor-slots');
         if (!main || !hot || !craft || !resultWrap) return;
         main.innerHTML = '';
         hot.innerHTML  = '';
         craft.innerHTML = '';
         resultWrap.innerHTML = '';
+        if (armor) {
+            armor.innerHTML = '';
+            const tips = ['Шлем', 'Нагрудник', 'Поножи', 'Ботинки'];
+            for (let i = 0; i < 4; i++) {
+                const el = document.createElement('div');
+                el.className = 'inventory-slot';
+                el.title = tips[i];
+                setupHotbarSlot(el, 'armor', i);
+                attachSlotHandlers(el, 'armor', i);
+                armor.appendChild(el);
+            }
+        }
 
         const isCreative = (game.gameMode === 1 || game.gameMode === 2);
         document.body.classList.toggle('creative-mode', isCreative);
@@ -4018,8 +4129,9 @@
     ITEMS[ITEM_LOOTBOX_EPIC]  = { kind: 'misc', name: 'Легендарный сундук',               tile: TILE.LOOTBOX_EPIC, stack: 16 };
     ITEMS[ITEM_DAGGER]        = { kind: 'tool', toolType: 'sword', name: 'Кинжал',         tile: TILE.DAGGER,       stack: 1, maxDurability: 96, speed: 1.5, tier: 1, damage: 4 };
 
-    // Armour items. Right now they're inventory-only collectibles (visible
-    // model + stat hooks could be added later); they don't reduce damage yet.
+    // Armour items. Drag/drop or shift-click into the dedicated armour
+    // slots in the inventory; equipped pieces reduce incoming damage
+    // (~4% per defense point, capped at 80%).
     const ITEM_HELM_IRON  = ITEM_ID_BASE + 240;
     const ITEM_CHEST_IRON = ITEM_ID_BASE + 241;
     const ITEM_LEGS_IRON  = ITEM_ID_BASE + 242;
@@ -5937,6 +6049,7 @@
                 gameMode: game.gameMode,
                 hotbar: HOTBAR_ITEMS,
                 inv: INV_ITEMS,
+                armor: ARMOR_SLOTS,
                 selectedSlot: game.ui.selectedSlot,
                 timeOfDay: game.sky.timeOfDay,
                 savedAt: Date.now()
@@ -6014,6 +6127,16 @@
             for (let i = 0; i < INV_ITEMS.length && i < data.inv.length; i++) {
                 const s = data.inv[i] || {};
                 INV_ITEMS[i] = {
+                    type: s.type ?? null,
+                    count: s.count ?? 0,
+                    durability: s.durability ?? null
+                };
+            }
+        }
+        if (Array.isArray(data.armor)) {
+            for (let i = 0; i < ARMOR_SLOTS.length && i < data.armor.length; i++) {
+                const s = data.armor[i] || {};
+                ARMOR_SLOTS[i] = {
                     type: s.type ?? null,
                     count: s.count ?? 0,
                     durability: s.durability ?? null
@@ -8440,8 +8563,11 @@
         if (game.gameMode !== 0) return; // only Survival
         if (performance.now() - game.player.lastHurtAt < 600) return;
         game.player.lastHurtAt = performance.now();
-        game.player.hp = Math.max(0, game.player.hp - mob.def.dmg);
-        addChatMessage(`§c${mob.def.label} нанёс ${mob.def.dmg} урона`, 'normal');
+        const raw = mob.def.dmg;
+        const dmg = (typeof reduceDamageByArmor === 'function') ? reduceDamageByArmor(raw) : raw;
+        game.player.hp = Math.max(0, game.player.hp - dmg);
+        const armorTxt = (dmg < raw) ? ` (броня сократила ${raw}→${dmg})` : '';
+        addChatMessage(`§c${mob.def.label} нанёс ${dmg} урона${armorTxt}`, 'normal');
         flashHurt();
         if (typeof audio !== 'undefined') audio.playerHurt();
         if (game.player.hp <= 0) playerDie();
@@ -8553,7 +8679,9 @@
         if (game.gameMode === 0) {
             const dist = mob.pos.distanceTo(game.player.pos);
             if (dist < r + 1) {
-                game.player.hp = Math.max(0, game.player.hp - Math.max(2, Math.floor(10 - dist * 2)));
+                const _raw = Math.max(2, Math.floor(10 - dist * 2));
+                const _dmg = (typeof reduceDamageByArmor === 'function') ? reduceDamageByArmor(_raw) : _raw;
+                game.player.hp = Math.max(0, game.player.hp - _dmg);
                 flashHurt();
                 if (game.player.hp <= 0) playerDie();
             }
@@ -8585,7 +8713,9 @@
             if (distP < 0.8) {
                 if (game.gameMode === 0 && performance.now() - game.player.lastHurtAt > 400) {
                     game.player.lastHurtAt = performance.now();
-                    game.player.hp = Math.max(0, game.player.hp - mob.def.dmg);
+                    const _raw = mob.def.dmg;
+                    const _dmg = (typeof reduceDamageByArmor === 'function') ? reduceDamageByArmor(_raw) : _raw;
+                    game.player.hp = Math.max(0, game.player.hp - _dmg);
                     flashHurt();
                     if (game.player.hp <= 0) playerDie();
                 }
@@ -9451,6 +9581,18 @@
         { id: 'pack_arrows',     name: '64 стрелы + лук',       desc: 'Полный набор для лучника',               cost: 18,  grant() {
             inventoryAdd(ITEM_BOW, 1);
             inventoryAdd(ITEM_ARROW, 64);
+        }, ptw: true },
+        { id: 'set_iron_armor',  name: 'Железная броня',         desc: 'Шлем + нагрудник + штаны + ботинки железа', cost: 50, grant() {
+            inventoryAdd(ITEM_HELM_IRON, 1);
+            inventoryAdd(ITEM_CHEST_IRON, 1);
+            inventoryAdd(ITEM_LEGS_IRON, 1);
+            inventoryAdd(ITEM_BOOTS_IRON, 1);
+        }, ptw: true },
+        { id: 'set_diamond_armor', name: 'Алмазная броня',       desc: 'Полный комплект алмазной брони (−80% урона)', cost: 200, grant() {
+            inventoryAdd(ITEM_HELM_DIA, 1);
+            inventoryAdd(ITEM_CHEST_DIA, 1);
+            inventoryAdd(ITEM_LEGS_DIA, 1);
+            inventoryAdd(ITEM_BOOTS_DIA, 1);
         }, ptw: true },
 
         // Lootboxes - cosmetic only.
