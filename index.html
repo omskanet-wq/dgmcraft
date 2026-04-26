@@ -3164,6 +3164,35 @@
         }
     }
 
+    // Drops `count` of `typeId` at world coordinates (x, y, z). Works for both
+    // blocks and items.
+    function spawnDroppedItem(typeId, count, x, y, z) {
+        const data = isItemId(typeId) ? null : BLOCK_DATA[typeId];
+        for (let i = 0; i < count; i++) {
+            const geo = new THREE.BoxGeometry(0.25, 0.25, 0.25);
+            const colour = data ? data.top : 0xb0a070;
+            const mat = new THREE.MeshLambertMaterial({color: colour});
+            const m = new THREE.Mesh(geo, mat);
+            m.position.set(
+                x + (Math.random() - 0.5) * 0.4,
+                y,
+                z + (Math.random() - 0.5) * 0.4
+            );
+            m.userData = {
+                velocity: new THREE.Vector3(
+                    (Math.random() - 0.5) * 2,
+                    3,
+                    (Math.random() - 0.5) * 2
+                ),
+                blockType: typeId,
+                lifetime: 300,
+                bobOffset: Math.random() * Math.PI * 2
+            };
+            game.droppedItems.push(m);
+            if (game.scene) game.scene.add(m);
+        }
+    }
+
     function spawnDropFromPlayer(typeId, count) {
         // Reuse the existing block-drop pipeline. Tools fall back to a generic
         // grey cube mesh.
@@ -3697,7 +3726,12 @@
         // Swords
         SWORD_WOOD: 64,  SWORD_STONE: 65,  SWORD_IRON: 66,  SWORD_GOLD: 67,  SWORD_DIAMOND: 68,
         // Hoes
-        HOE_WOOD: 69,    HOE_STONE: 70,    HOE_IRON: 71,    HOE_GOLD: 72,    HOE_DIAMOND: 73
+        HOE_WOOD: 69,    HOE_STONE: 70,    HOE_IRON: 71,    HOE_GOLD: 72,    HOE_DIAMOND: 73,
+
+        // Food (fresh row).
+        WHEAT:        80, BREAD:        81, APPLE:        82, GOLDEN_APPLE: 83,
+        RAW_BEEF:     84, COOKED_BEEF:  85, RAW_PORK:     86, COOKED_PORK:  87,
+        COOKIE:       88, MUSHROOM_STEW:89, COAL_ITEM:    90
     };
 
     // Per-block, per-face tile lookup. {top, side, bottom} optional; defaults
@@ -3796,6 +3830,50 @@
                 stack: 1
             };
         }
+    }
+
+    // ---- Food items ----
+    // Item IDs 1100+ for food (well above the 1000+5*5*10=1250 tool range,
+    // but tool encoding only uses bits in a smaller range so 1100 is safe;
+    // we still pick numbers that don't collide with toolItemId() outputs).
+    const ITEM_WHEAT         = ITEM_ID_BASE + 200;
+    const ITEM_BREAD         = ITEM_ID_BASE + 201;
+    const ITEM_APPLE         = ITEM_ID_BASE + 202;
+    const ITEM_GOLDEN_APPLE  = ITEM_ID_BASE + 203;
+    const ITEM_RAW_BEEF      = ITEM_ID_BASE + 204;
+    const ITEM_COOKED_BEEF   = ITEM_ID_BASE + 205;
+    const ITEM_RAW_PORK      = ITEM_ID_BASE + 206;
+    const ITEM_COOKED_PORK   = ITEM_ID_BASE + 207;
+    const ITEM_COOKIE        = ITEM_ID_BASE + 208;
+    const ITEM_MUSHROOM_STEW = ITEM_ID_BASE + 209;
+    const ITEM_COAL          = ITEM_ID_BASE + 210;
+
+    // hunger = HP refilled (approx Mojang values), saturation small bonus.
+    function defineFood(id, name, tile, hunger, saturation, extra) {
+        ITEMS[id] = Object.assign({
+            kind: 'food', name, tile, stack: 64,
+            hunger: hunger || 2,
+            saturation: saturation || 0
+        }, extra || {});
+    }
+    defineFood(ITEM_WHEAT,         'Пшеница',        TILE.WHEAT,        0, 0, { kind: 'misc' });
+    defineFood(ITEM_BREAD,         'Хлеб',           TILE.BREAD,        5, 6);
+    defineFood(ITEM_APPLE,         'Яблоко',         TILE.APPLE,        4, 2.4);
+    defineFood(ITEM_GOLDEN_APPLE,  'Золотое яблоко', TILE.GOLDEN_APPLE, 4, 9.6, { regen: 5 });
+    defineFood(ITEM_RAW_BEEF,      'Сырая говядина', TILE.RAW_BEEF,     3, 1.8);
+    defineFood(ITEM_COOKED_BEEF,   'Жареная говядина',TILE.COOKED_BEEF, 8, 12.8);
+    defineFood(ITEM_RAW_PORK,      'Сырая свинина',  TILE.RAW_PORK,     3, 1.8);
+    defineFood(ITEM_COOKED_PORK,   'Жареная свинина',TILE.COOKED_PORK,  8, 12.8);
+    defineFood(ITEM_COOKIE,        'Печенье',        TILE.COOKIE,       2, 0.4);
+    defineFood(ITEM_MUSHROOM_STEW, 'Грибной суп',    TILE.MUSHROOM_STEW, 6, 7.2, { stack: 1 });
+    ITEMS[ITEM_COAL] = { kind: 'misc', name: 'Уголь', tile: TILE.COAL_ITEM, stack: 64 };
+    // Wheat is an ingredient, not eaten directly: keep kind=misc so it
+    // doesn't trigger the eat-on-rmb hold.
+    ITEMS[ITEM_WHEAT].kind = 'misc';
+
+    function isFoodItem(id) {
+        const d = ITEMS[id];
+        return !!(d && d.kind === 'food');
     }
 
     function isItemId(id) {
@@ -4498,6 +4576,105 @@
         ctx.fillRect(8, 5, 1, 1);
     }
 
+    // ---- Food / consumable icons (16×16 each). Pixel-art style. ----
+    function drawWheatIcon(ctx) {
+        // Single golden stalk with grain bumps.
+        ctx.fillStyle = '#3b6a1c';
+        ctx.fillRect(7, 12, 2, 3);          // base stem
+        ctx.fillStyle = '#d8a93e';
+        // ears
+        for (let r = 0; r < 4; r++) {
+            ctx.fillRect(5, 3 + r*2, 6, 2);
+        }
+        ctx.fillStyle = '#f1c763';
+        for (let r = 0; r < 4; r++) {
+            ctx.fillRect(6, 3 + r*2, 1, 1);
+            ctx.fillRect(9, 3 + r*2, 1, 1);
+        }
+    }
+    function drawBreadIcon(ctx) {
+        ctx.fillStyle = '#a16d34';
+        ctx.fillRect(2, 5, 12, 7);
+        ctx.fillStyle = '#c08545';
+        ctx.fillRect(2, 5, 12, 1);
+        ctx.fillRect(2, 5, 1, 7);
+        ctx.fillStyle = '#7a4f25';
+        ctx.fillRect(2, 11, 12, 1);
+        ctx.fillRect(13, 5, 1, 7);
+        // crust slashes
+        ctx.fillStyle = '#7a4f25';
+        ctx.fillRect(5, 7, 1, 3);
+        ctx.fillRect(8, 6, 1, 4);
+        ctx.fillRect(11, 7, 1, 3);
+    }
+    function drawAppleIcon(ctx) {
+        ctx.fillStyle = '#cc2a2a';
+        ctx.fillRect(4, 4, 8, 9);
+        ctx.fillStyle = '#ee5454';
+        ctx.fillRect(4, 4, 1, 9);
+        ctx.fillRect(4, 4, 8, 1);
+        ctx.fillStyle = '#992020';
+        ctx.fillRect(11, 4, 1, 9);
+        ctx.fillRect(4, 12, 8, 1);
+        ctx.fillStyle = '#3b6a1c';
+        ctx.fillRect(8, 2, 2, 2);
+        ctx.fillStyle = '#5a3010';
+        ctx.fillRect(7, 3, 1, 1);
+    }
+    function drawGoldenAppleIcon(ctx) {
+        ctx.fillStyle = '#e8b321';
+        ctx.fillRect(4, 4, 8, 9);
+        ctx.fillStyle = '#ffd95a';
+        ctx.fillRect(4, 4, 1, 9);
+        ctx.fillRect(4, 4, 8, 1);
+        ctx.fillStyle = '#a87d12';
+        ctx.fillRect(11, 4, 1, 9);
+        ctx.fillRect(4, 12, 8, 1);
+        ctx.fillStyle = '#3b6a1c';
+        ctx.fillRect(8, 2, 2, 2);
+        ctx.fillStyle = '#5a3010';
+        ctx.fillRect(7, 3, 1, 1);
+    }
+    function drawMeatIcon(ctx, raw) {
+        const body = raw ? '#d65a5a' : '#8e4a1a';
+        const lite = raw ? '#ee8989' : '#b07034';
+        const dark = raw ? '#992828' : '#5a2f0e';
+        ctx.fillStyle = body; ctx.fillRect(3, 5, 10, 7);
+        ctx.fillStyle = lite; ctx.fillRect(3, 5, 10, 1); ctx.fillRect(3, 5, 1, 7);
+        ctx.fillStyle = dark; ctx.fillRect(12, 5, 1, 7); ctx.fillRect(3, 11, 10, 1);
+        // bone nub on the right.
+        ctx.fillStyle = '#eeeae0'; ctx.fillRect(12, 7, 2, 2);
+        ctx.fillStyle = '#d6cfc0'; ctx.fillRect(13, 8, 1, 1);
+    }
+    function drawCookieIcon(ctx) {
+        ctx.fillStyle = '#a8723a';
+        ctx.fillRect(3, 4, 10, 9);
+        ctx.fillStyle = '#c08c52';
+        ctx.fillRect(3, 4, 10, 1); ctx.fillRect(3, 4, 1, 9);
+        ctx.fillStyle = '#5d3914';
+        ctx.fillRect(5, 6, 1, 1); ctx.fillRect(9, 6, 1, 1);
+        ctx.fillRect(7, 8, 1, 1); ctx.fillRect(10, 9, 1, 1);
+        ctx.fillRect(5, 10, 1, 1);
+    }
+    function drawStewIcon(ctx) {
+        ctx.fillStyle = '#888'; ctx.fillRect(2, 7, 12, 6);
+        ctx.fillStyle = '#aaa'; ctx.fillRect(2, 7, 12, 1);
+        ctx.fillStyle = '#666'; ctx.fillRect(13, 7, 1, 6); ctx.fillRect(2, 12, 12, 1);
+        ctx.fillStyle = '#a37c46'; ctx.fillRect(3, 6, 10, 2);
+        ctx.fillStyle = '#cd9b54';
+        ctx.fillRect(4, 6, 1, 1); ctx.fillRect(7, 6, 1, 1); ctx.fillRect(10, 6, 1, 1);
+    }
+    function drawCoalItemIcon(ctx) {
+        ctx.fillStyle = '#1c1c1c';
+        ctx.fillRect(3, 4, 10, 9);
+        ctx.fillStyle = '#3a3a3a';
+        ctx.fillRect(3, 4, 10, 1); ctx.fillRect(3, 4, 1, 9);
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(12, 4, 1, 9); ctx.fillRect(3, 12, 10, 1);
+        ctx.fillStyle = '#555';
+        ctx.fillRect(6, 6, 1, 1); ctx.fillRect(9, 8, 1, 1);
+    }
+
     function createBlockAtlas() {
         const c = document.createElement('canvas');
         c.width = c.height = ATLAS_SIZE;
@@ -4574,7 +4751,19 @@
             [TILE.HOE_STONE]:   (ctx) => drawHoeIcon(ctx, 'stone'),
             [TILE.HOE_IRON]:    (ctx) => drawHoeIcon(ctx, 'iron'),
             [TILE.HOE_GOLD]:    (ctx) => drawHoeIcon(ctx, 'gold'),
-            [TILE.HOE_DIAMOND]: (ctx) => drawHoeIcon(ctx, 'diamond')
+            [TILE.HOE_DIAMOND]: (ctx) => drawHoeIcon(ctx, 'diamond'),
+
+            [TILE.WHEAT]:        drawWheatIcon,
+            [TILE.BREAD]:        drawBreadIcon,
+            [TILE.APPLE]:        drawAppleIcon,
+            [TILE.GOLDEN_APPLE]: drawGoldenAppleIcon,
+            [TILE.RAW_BEEF]:     (ctx) => drawMeatIcon(ctx, true),
+            [TILE.COOKED_BEEF]:  (ctx) => drawMeatIcon(ctx, false),
+            [TILE.RAW_PORK]:     (ctx) => drawMeatIcon(ctx, true),
+            [TILE.COOKED_PORK]:  (ctx) => drawMeatIcon(ctx, false),
+            [TILE.COOKIE]:       drawCookieIcon,
+            [TILE.MUSHROOM_STEW]: drawStewIcon,
+            [TILE.COAL_ITEM]:    drawCoalItemIcon
         };
 
         for (const [k, fn] of Object.entries(drawers)) {
@@ -5588,7 +5777,18 @@
         // Drop item only if the held tool meets the block's requirement.
         // Hand-mining still works for "soft" blocks (no requirement).
         if (canHarvest(type)) {
-            spawnDroppedBlock(x, y, z, type);
+            // Tall grass / dead bush -> chance for wheat (Minecraft-like).
+            if (type === BLOCKS.TALL_GRASS || type === BLOCKS.DEAD_BUSH) {
+                if (Math.random() < 0.25) {
+                    spawnDroppedItem(ITEM_WHEAT, 1, x + 0.5, y + 0.5, z + 0.5);
+                }
+            } else if (type === BLOCKS.LEAVES) {
+                if (Math.random() < 0.05) {
+                    spawnDroppedItem(ITEM_APPLE, 1, x + 0.5, y + 0.5, z + 0.5);
+                }
+            } else {
+                spawnDroppedBlock(x, y, z, type);
+            }
         }
 
         // Burst of pixel-art particles using same texture atlas.
@@ -5609,7 +5809,10 @@
 
     function spawnDroppedBlock(x, y, z, blockType) {
         if (!blockType || blockType === BLOCKS.AIR) return;
-
+        if (isItemId(blockType)) {
+            spawnDroppedItem(blockType, 1, x + 0.5, y + 0.5, z + 0.5);
+            return;
+        }
         const data = BLOCK_DATA[blockType];
         if (!data) return;
 
@@ -5637,6 +5840,58 @@
 
         game.droppedItems.push(item);
         game.scene.add(item);
+    }
+
+    // ---- Eating mechanic --------------------------------------------------
+    // Holding RMB while a food item is selected starts an eat-timer; releasing
+    // before the timer cancels it. Mojang uses ~1.6s.
+    function startEating() {
+        if (game.player.eating) return;
+        const held = HOTBAR_ITEMS[game.ui.selectedSlot];
+        if (!held || held.count <= 0 || !isFoodItem(held.type)) return;
+        // No need to eat if hunger already maxed (except special foods like
+        // golden apple which always grant regen).
+        const def = ITEMS[held.type];
+        if (game.player.hunger >= 20 && !(def && def.regen)) return;
+        game.player.eating = {
+            type: held.type,
+            startT: performance.now(),
+            duration: 1600
+        };
+    }
+    function cancelEating() {
+        game.player.eating = null;
+    }
+    function tickEating(dt) {
+        if (!game.player.eating) return;
+        const e = game.player.eating;
+        const t = performance.now() - e.startT;
+        const held = HOTBAR_ITEMS[game.ui.selectedSlot];
+        if (!held || held.type !== e.type || held.count <= 0) {
+            game.player.eating = null;
+            return;
+        }
+        if (t >= e.duration) {
+            // Consume one item, restore hunger.
+            const def = ITEMS[e.type];
+            if (def) {
+                game.player.hunger = Math.min(20, game.player.hunger + (def.hunger || 0));
+                if (typeof game.player.saturation === 'number') {
+                    game.player.saturation = Math.min(20, (game.player.saturation || 0) + (def.saturation || 0));
+                }
+                if (def.regen) {
+                    game.player.hp = Math.min(game.player.maxHp || 20, game.player.hp + def.regen);
+                }
+            }
+            held.count--;
+            if (held.count <= 0) clearSlot(held);
+            game.player.eating = null;
+            setupHotbar();
+            if (game.ui.inventory) renderInventoryAll();
+            if (typeof audio !== 'undefined' && audio.eat) audio.eat();
+            else if (typeof audio !== 'undefined' && audio.uiClick) audio.uiClick();
+            addChatMessage('§a+' + (def ? def.hunger : 0) + ' голод', 'normal');
+        }
     }
 
     function placeBlock() {
@@ -5832,12 +6087,23 @@
                 // under the crosshair (e.g. mob silhouetted against the sky).
                 if (typeof tryAttackMob === 'function') tryAttackMob();
             }
-            if (e.button === 2) placeBlock();
+            if (e.button === 2) {
+                // Right-click: eat held food, otherwise place a block.
+                const held = HOTBAR_ITEMS[game.ui.selectedSlot];
+                if (held && held.count > 0 && isFoodItem(held.type)) {
+                    startEating();
+                } else {
+                    placeBlock();
+                }
+            }
         });
 
         document.addEventListener('mouseup', e => {
             if (e.button === 0) {
                 game.input.mouseDown = false;
+            }
+            if (e.button === 2) {
+                cancelEating();
             }
         });
 
@@ -6009,6 +6275,71 @@
                 addToolRecipe(tt, mm, mblock);
             }
         }
+        // ---- Food recipes ----
+        RECIPES.push({
+            result: ITEM_BREAD, count: 1,
+            ingredients: [{ type: ITEM_WHEAT, count: 3 }],
+            shape: [
+                [null, null, null],
+                [ITEM_WHEAT, ITEM_WHEAT, ITEM_WHEAT],
+                [null, null, null]
+            ],
+            note: 'Хлеб из 3 пшеницы'
+        });
+        RECIPES.push({
+            result: ITEM_COOKIE, count: 8,
+            ingredients: [{ type: ITEM_WHEAT, count: 2 }, { type: ITEM_COAL, count: 1 }],
+            shape: [
+                [null, null, null],
+                [ITEM_WHEAT, ITEM_COAL, ITEM_WHEAT],
+                [null, null, null]
+            ],
+            note: 'Печенье (8) из 2 пшеницы + угля'
+        });
+        RECIPES.push({
+            result: ITEM_GOLDEN_APPLE, count: 1,
+            ingredients: [{ type: ITEM_APPLE, count: 1 }, { type: BLOCKS.GOLD_ORE, count: 8 }],
+            shape: [
+                [BLOCKS.GOLD_ORE, BLOCKS.GOLD_ORE, BLOCKS.GOLD_ORE],
+                [BLOCKS.GOLD_ORE, ITEM_APPLE,     BLOCKS.GOLD_ORE],
+                [BLOCKS.GOLD_ORE, BLOCKS.GOLD_ORE, BLOCKS.GOLD_ORE]
+            ],
+            note: 'Золотое яблоко: яблоко + 8 золота'
+        });
+        // Cooking via "raw + coal -> cooked" (no furnace yet).
+        RECIPES.push({
+            result: ITEM_COOKED_BEEF, count: 1,
+            ingredients: [{ type: ITEM_RAW_BEEF, count: 1 }, { type: ITEM_COAL, count: 1 }],
+            shape: [
+                [null, null, null],
+                [null, ITEM_RAW_BEEF, null],
+                [null, ITEM_COAL,     null]
+            ],
+            note: 'Жарка говядины'
+        });
+        RECIPES.push({
+            result: ITEM_COOKED_PORK, count: 1,
+            ingredients: [{ type: ITEM_RAW_PORK, count: 1 }, { type: ITEM_COAL, count: 1 }],
+            shape: [
+                [null, null, null],
+                [null, ITEM_RAW_PORK, null],
+                [null, ITEM_COAL,     null]
+            ],
+            note: 'Жарка свинины'
+        });
+        RECIPES.push({
+            result: ITEM_MUSHROOM_STEW, count: 1,
+            ingredients: [
+                { type: BLOCKS.MUSHROOM_RED,   count: 1 },
+                { type: BLOCKS.MUSHROOM_BROWN, count: 1 }
+            ],
+            shape: [
+                [null, BLOCKS.MUSHROOM_RED, null],
+                [null, BLOCKS.MUSHROOM_BROWN, null],
+                [null, null, null]
+            ],
+            note: 'Грибной суп: красный + коричневый'
+        });
     }
     buildRecipes();
 
@@ -6375,6 +6706,9 @@
             }
         }
 
+        // Daily-login achievement check on game start.
+        try { checkDailyLogin(); } catch (e) { console.error('daily login check failed:', e); }
+
         gameLoop();
     }
 
@@ -6597,6 +6931,17 @@
         villagerHmm() {
             this.tone(220, 180, 0.32, 'sine', 0.18);
         },
+        eat() {
+            // Quick chewing burst — short noise + low tone to feel like
+            // chomping. Played repeatedly while eating in tickEating.
+            this.burst({ duration: 0.05, cutoff: 1200, volume: 0.18 });
+            setTimeout(() => this.burst({ duration: 0.05, cutoff: 900, volume: 0.16 }), 80);
+        },
+        achievementUnlock() {
+            // Bright two-tone fanfare.
+            this.tone(660, 660, 0.10, 'sine', 0.28);
+            setTimeout(() => this.tone(990, 990, 0.18, 'sine', 0.25), 110);
+        },
 
         startAmbient() {
             if (!this.ctx || !this.enabled || this.ambientNode) return;
@@ -6711,6 +7056,8 @@
         updateBreakParticles(dt);
         if (typeof updateMobs === 'function') updateMobs(dt);
         if (typeof updatePlayerVitals === 'function') updatePlayerVitals(dt);
+        if (typeof tickEating === 'function') tickEating(dt);
+        if (typeof tickDailyAchievements === 'function') tickDailyAchievements(dt);
 
         // FPS
         game.stats.frameCount++;
@@ -7610,6 +7957,22 @@
     function finalizeKillMob(mob) {
         if (mob._cleaned) return;
         mob._cleaned = true;
+        // Drop loot at the death position (food / materials).
+        if (mob.def && mob.def.loot && mob.pos) {
+            const lootMap = {
+                beef: ITEM_RAW_BEEF,
+                pork: ITEM_RAW_PORK,
+                rotten: null,
+                bone: null,
+                gunpowder: null,
+                string: null
+            };
+            const lootId = lootMap[mob.def.loot];
+            if (lootId != null && typeof spawnDroppedItem === 'function') {
+                const n = 1 + Math.floor(Math.random() * 2);
+                spawnDroppedItem(lootId, n, mob.pos.x, mob.pos.y + 0.5, mob.pos.z);
+            }
+        }
         if (game.scene && mob.mesh) game.scene.remove(mob.mesh);
         const i = game.mobs.list.indexOf(mob);
         if (i !== -1) game.mobs.list.splice(i, 1);
@@ -8292,6 +8655,163 @@
             return origProcess(input);
         };
     }
+
+    // ============================================================================
+    // DAILY-LOGIN ACHIEVEMENTS
+    // ============================================================================
+    //
+    // We track a 30-day login ladder in localStorage. Each in-game day the
+    // player joins, the streak advances by one (day-by-day, resets if they
+    // skip more than one day). Each completed day awards a one-time bundle
+    // of items.
+    const ACHIEVEMENT_LADDER = [
+        { day: 1,  reward: { items: [{type: ITEM_BREAD, count: 5}],                                 label: '5× хлеб' } },
+        { day: 2,  reward: { items: [{type: ITEM_APPLE, count: 4}],                                 label: '4× яблоко' } },
+        { day: 3,  reward: { items: [
+            {type: toolItemId('pickaxe', 'stone'), count: 1},
+            {type: toolItemId('axe',     'stone'), count: 1},
+            {type: toolItemId('shovel',  'stone'), count: 1},
+            {type: toolItemId('sword',   'stone'), count: 1}
+        ], label: 'каменные инструменты' } },
+        { day: 4,  reward: { items: [{type: ITEM_COOKIE, count: 8}],                                label: '8× печенье' } },
+        { day: 5,  reward: { items: [{type: ITEM_COOKED_BEEF, count: 3}],                           label: '3× жареная говядина' } },
+        { day: 6,  reward: { items: [{type: BLOCKS.GLOWSTONE, count: 4}],                           label: '4× glowstone' } },
+        { day: 7,  reward: { items: [
+            {type: toolItemId('pickaxe', 'iron'), count: 1},
+            {type: toolItemId('sword',   'iron'), count: 1}
+        ], label: 'железная кирка + меч' } },
+        { day: 10, reward: { items: [{type: ITEM_GOLDEN_APPLE, count: 1}],                          label: 'золотое яблоко' } },
+        { day: 14, reward: { items: [{type: toolItemId('sword', 'diamond'), count: 1}],             label: 'алмазный меч' } },
+        { day: 21, reward: { items: [{type: toolItemId('pickaxe', 'diamond'), count: 1}],           label: 'алмазная кирка' } },
+        { day: 30, reward: { items: [{type: BLOCKS.DIAMOND_ORE, count: 8}, {type: BLOCKS.GLOWSTONE, count: 16}], label: 'набор алмазной руды + glowstone' } }
+    ];
+    const DAILY_KEY = 'dgmcraft_dailyLogin';
+    function loadDaily() {
+        try {
+            return JSON.parse(localStorage.getItem(DAILY_KEY)) || {};
+        } catch { return {}; }
+    }
+    function saveDaily(d) {
+        try { localStorage.setItem(DAILY_KEY, JSON.stringify(d)); } catch {}
+    }
+    function todayKey() {
+        const d = new Date();
+        return d.getUTCFullYear() + '-' + (d.getUTCMonth()+1) + '-' + d.getUTCDate();
+    }
+    function dayDelta(a, b) {
+        const ax = new Date(a + 'Z'); const bx = new Date(b + 'Z');
+        return Math.round((bx - ax) / (1000 * 60 * 60 * 24));
+    }
+    function checkDailyLogin() {
+        const data = loadDaily();
+        const today = todayKey();
+        let streak = data.streak || 0;
+        const claimed = data.claimed || [];
+        if (data.lastDate === today) {
+            // Already counted today — still try to grant any unclaimed reward
+            // for the current streak day in case the user closed before we
+            // saved last time.
+        } else {
+            if (data.lastDate) {
+                const dd = dayDelta(data.lastDate, today);
+                streak = (dd === 1) ? (streak + 1) : 1;
+            } else {
+                streak = 1;
+            }
+            data.lastDate = today;
+            data.streak = streak;
+            data.claimed = claimed;
+            saveDaily(data);
+        }
+        // Award any not-yet-claimed rewards <= current streak.
+        for (const entry of ACHIEVEMENT_LADDER) {
+            if (entry.day <= streak && !claimed.includes(entry.day)) {
+                grantAchievement(entry);
+                claimed.push(entry.day);
+            }
+        }
+        data.claimed = claimed;
+        saveDaily(data);
+    }
+    function grantAchievement(entry) {
+        for (const it of entry.reward.items) {
+            if (it.type == null) continue;
+            if (!inventoryAdd(it.type, it.count)) {
+                spawnDropFromPlayer(it.type, it.count);
+            }
+        }
+        addChatMessage('§eДень ' + entry.day + ' — награда: §f' + entry.reward.label, 'success');
+        showAchievementToast('Ежедневный вход — день ' + entry.day, entry.reward.label);
+        if (typeof audio !== 'undefined' && audio.achievementUnlock) audio.achievementUnlock();
+        setupHotbar();
+        if (game.ui.inventory) renderInventoryAll();
+    }
+    function showAchievementToast(title, sub) {
+        let host = document.getElementById('achievement-toast');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'achievement-toast';
+            host.style.cssText = 'position:fixed;top:14px;right:14px;background:linear-gradient(180deg,#2a2c2e,#1a1c1e);border:2px solid #555;color:#ffe;padding:10px 14px;font-family:"Press Start 2P",monospace;font-size:11px;z-index:99999;box-shadow:0 4px 0 #000;';
+            document.body.appendChild(host);
+        }
+        host.innerHTML = '<div style="color:#ffd95a;font-size:10px;margin-bottom:6px">★ ' + title + '</div><div style="font-size:10px;color:#ddd">' + sub + '</div>';
+        host.style.display = 'block';
+        clearTimeout(host._timer);
+        host._timer = setTimeout(() => { host.style.display = 'none'; }, 4500);
+    }
+    // Optional rendering hook every frame (currently a no-op; kept for future
+    // achievement progression in survival).
+    function tickDailyAchievements(dt) {}
+
+    // Achievements panel — shows the 30-day ladder with claimed/locked state.
+    function showAchievementsPanel() {
+        const data = loadDaily();
+        const claimed = data.claimed || [];
+        const streak = data.streak || 0;
+        let host = document.getElementById('achievements-panel');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'achievements-panel';
+            host.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);z-index:9000;';
+            host.addEventListener('click', e => {
+                if (e.target === host) host.style.display = 'none';
+            });
+            document.body.appendChild(host);
+        }
+        const inner = document.createElement('div');
+        inner.style.cssText = 'background:#dadada;border:4px solid #1a1a1a;padding:18px 22px;font-family:"Press Start 2P",monospace;color:#1a1a1a;max-width:680px;width:90%;max-height:80vh;overflow-y:auto;';
+        let html = '<div style="font-size:14px;margin-bottom:8px">Достижения за вход</div>'
+                 + '<div style="font-size:10px;margin-bottom:14px;color:#444">Текущая серия: ' + streak + ' дн.</div>'
+                 + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">';
+        for (const entry of ACHIEVEMENT_LADDER) {
+            const got = claimed.includes(entry.day);
+            const reachable = streak >= entry.day;
+            const bg = got ? '#90c074' : (reachable ? '#c0a050' : '#a0a0a0');
+            html += '<div style="background:'+bg+';padding:8px;border:2px solid #1a1a1a;font-size:9px;line-height:1.4">'
+                  + '<div style="font-size:10px;margin-bottom:4px">День ' + entry.day + '</div>'
+                  + '<div>' + entry.reward.label + '</div>'
+                  + '<div style="margin-top:4px;font-size:8px;color:#222">' + (got ? '✓ получено' : (reachable ? 'готово' : 'недоступно')) + '</div>'
+                  + '</div>';
+        }
+        html += '</div><div style="margin-top:14px;font-size:9px;color:#444">Закрыть: щёлкни вне окна или нажми Esc.</div>';
+        inner.innerHTML = html;
+        host.innerHTML = '';
+        host.appendChild(inner);
+        host.style.display = 'flex';
+    }
+
+    // Hotkey: J -> open achievements panel.
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyJ' && !e.repeat && !e.target.matches('input,textarea')) {
+            const host = document.getElementById('achievements-panel');
+            if (host && host.style.display === 'flex') host.style.display = 'none';
+            else showAchievementsPanel();
+        }
+        if (e.code === 'Escape') {
+            const host = document.getElementById('achievements-panel');
+            if (host) host.style.display = 'none';
+        }
+    });
 
     // Start
     init();
