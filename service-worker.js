@@ -1,6 +1,6 @@
 // DgmCraft service worker — offline cache for the static game.
 // Bumping CACHE_VERSION invalidates older caches.
-const CACHE_VERSION = 'dgmcraft-v5';
+const CACHE_VERSION = 'dgmcraft-v6';
 const PRECACHE = [
   './',
   'index.html',

@@ -1348,7 +1348,11 @@
         REDSTONE_LAMP_OFF: 33,
         REDSTONE_LAMP_ON: 34,
         // Decorative emissive
-        GLOWSTONE: 35
+        GLOWSTONE: 35,
+        // New biome blocks (mesa / mushroom)
+        RED_SAND: 36,
+        TERRACOTTA: 37,
+        MYCELIUM: 38
     };
 
     const BLOCK_DATA = {
@@ -1600,6 +1604,21 @@
             name: 'Glowstone',
             top: 0xFFD66B, side: 0xFFC85A, bottom: 0xFFC85A,
             solid: true, emissive: 0xFFB030
+        },
+        [BLOCKS.RED_SAND]: {
+            name: 'Red Sand',
+            top: 0xC85A28, side: 0xB04020, bottom: 0xA03818,
+            solid: true
+        },
+        [BLOCKS.TERRACOTTA]: {
+            name: 'Terracotta',
+            top: 0x9C5532, side: 0x884624, bottom: 0x6F3A1E,
+            solid: true
+        },
+        [BLOCKS.MYCELIUM]: {
+            name: 'Mycelium',
+            top: 0x6E5A6A, side: 0x6E5530, bottom: 0x6E5530,
+            solid: true, sideGrass: true
         }
     };
 
@@ -1639,7 +1658,10 @@
         [BLOCKS.REDSTONE_WIRE_ON]:    'Редстоун-провод (под напряжением). Сигнал распространяется по соседям.',
         [BLOCKS.REDSTONE_LAMP_OFF]:   'Редстоун-лампа. Загорится, если рядом провод или источник под сигналом.',
         [BLOCKS.REDSTONE_LAMP_ON]:    'Редстоун-лампа (горит). На неё подан сигнал.',
-        [BLOCKS.GLOWSTONE]:    'Светящийся камень — постоянный источник света.'
+        [BLOCKS.GLOWSTONE]:    'Светящийся камень — постоянный источник света.',
+        [BLOCKS.RED_SAND]:     'Красный песок — встречается в биоме mesa/badlands.',
+        [BLOCKS.TERRACOTTA]:   'Терракота — обожжённая глина в полосах биома mesa.',
+        [BLOCKS.MYCELIUM]:     'Мицелий — почва грибного биома, на ней растут грибы.'
     };
 
     let HOTBAR_ITEMS = Array.from({length: 9}, () => ({type: null, count: 0, durability: null}));
@@ -2642,8 +2664,18 @@
 
             // Pickup if close to player — uses the unified inventory helper so
             // overflow falls through into the 27-slot main inventory.
-            const dist = item.position.distanceTo(game.player.pos);
-            if (dist < 1.5) {
+            // Slightly larger pickup radius and stronger magnetism: items
+            // within ~3 blocks accelerate toward the player so they don't
+            // get stuck on terrain edges (a frequent cause of "stone didn't
+            // enter inventory" reports).
+            const playerCentre = game.player.pos.clone ? game.player.pos.clone() : new THREE.Vector3(game.player.pos.x, game.player.pos.y, game.player.pos.z);
+            playerCentre.y += 0.6;
+            const dist = item.position.distanceTo(playerCentre);
+            if (dist < 3.0) {
+                const pull = playerCentre.clone().sub(item.position).multiplyScalar(8 * dt);
+                item.position.add(pull);
+            }
+            if (dist < 1.8) {
                 // Coins go straight to the wallet, never to inventory.
                 if (typeof tryConsumeCoinPickup === 'function'
                     && tryConsumeCoinPickup(data.blockType, 1)) {
@@ -3644,9 +3676,19 @@
         const temp = game.world.biomeNoise.noise2D(x * 0.002, z * 0.002);
         const humid = game.world.biomeNoise.noise2D(x * 0.002 + 500, z * 0.002 + 500);
 
+        // Hot + dry → mesa, hot + wet → jungle, hot otherwise → desert.
+        if (temp > 0.55 && humid > 0.2) return 'jungle';
+        if (temp > 0.55 && humid < -0.2) return 'mesa';
         if (temp > 0.4) return 'desert';
+
+        // Cold biomes split: very cold + dry → ice plains, cold → snow/taiga.
+        if (temp < -0.55 && humid < -0.1) return 'ice_plains';
         if (temp < -0.4) return 'snow';
+
+        // Mild biomes by humidity.
+        if (humid > 0.55) return 'mushroom';
         if (humid > 0.3) return 'forest';
+        if (humid < -0.3) return 'savanna';
         return 'plains';
     }
 
@@ -3680,9 +3722,14 @@
                     const height = getTerrainHeight(worldX, worldZ);
                     const biome = getBiome(worldX, worldZ);
 
-                    if (height >= CONFIG.WATER_LEVEL + 2 && biome !== 'desert') {
+                    if (height >= CONFIG.WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'mesa' && biome !== 'ice_plains') {
                         const treeNoise = game.world.detailNoise.noise2D(worldX * 0.5, worldZ * 0.5);
-                        if (treeNoise > 0.6 && Math.random() < (biome === 'forest' ? 0.15 : 0.03)) {
+                        const density = biome === 'jungle' ? 0.30
+                                      : biome === 'forest' ? 0.15
+                                      : biome === 'savanna' ? 0.05
+                                      : biome === 'mushroom' ? 0.02
+                                      : 0.03;
+                        if (treeNoise > 0.55 && Math.random() < density) {
                             trees.push({x, z, y: height});
                         }
                     }
@@ -3783,7 +3830,16 @@
         GOLD_INGOT:    95, EMERALD:      96, DIAMOND_GEM:  97, REDSTONE_DUST:98,
         BONE:          99, STRING:      100, GUNPOWDER:   101, FLINT:       102,
         DGM_COIN:     103, LOOTBOX_COMMON:104,LOOTBOX_RARE:105,LOOTBOX_EPIC:106,
-        DAGGER:       107
+        DAGGER:       107,
+
+        // Biome blocks.
+        RED_SAND:     108, TERRACOTTA:   109, MYCELIUM_TOP: 110, MYCELIUM_SIDE:111,
+
+        // Armour & utility items.
+        HELM_IRON:    112, CHEST_IRON:   113, LEGS_IRON:    114, BOOTS_IRON:   115,
+        HELM_DIA:     116, CHEST_DIA:    117, LEGS_DIA:     118, BOOTS_DIA:    119,
+        PAPER:        120, BOOK:         121, COMPASS:      122, CLOCK:        123,
+        ENDER_PEARL:  124, BLAZE_ROD:    125, FEATHER:      126, SLIMEBALL:    127
     };
 
     // Per-block, per-face tile lookup. {top, side, bottom} optional; defaults
@@ -3817,6 +3873,9 @@
         [BLOCKS.REDSTONE_LAMP_OFF]:   { all: TILE.LAMP_OFF },
         [BLOCKS.REDSTONE_LAMP_ON]:    { all: TILE.LAMP_ON },
         [BLOCKS.GLOWSTONE]:    { all: TILE.GLOWSTONE },
+        [BLOCKS.RED_SAND]:     { all: TILE.RED_SAND },
+        [BLOCKS.TERRACOTTA]:   { all: TILE.TERRACOTTA },
+        [BLOCKS.MYCELIUM]:     { top: TILE.MYCELIUM_TOP, side: TILE.MYCELIUM_SIDE, bottom: TILE.DIRT },
         [BLOCKS.WATER]:        { all: TILE.WATER },
         [BLOCKS.DEAD_BUSH]:    { all: TILE.DEAD_BUSH },
         [BLOCKS.TALL_GRASS]:   { all: TILE.TALL_GRASS },
@@ -3958,6 +4017,41 @@
     ITEMS[ITEM_LOOTBOX_RARE]  = { kind: 'misc', name: 'Редкий сундук',                    tile: TILE.LOOTBOX_RARE, stack: 16 };
     ITEMS[ITEM_LOOTBOX_EPIC]  = { kind: 'misc', name: 'Легендарный сундук',               tile: TILE.LOOTBOX_EPIC, stack: 16 };
     ITEMS[ITEM_DAGGER]        = { kind: 'tool', toolType: 'sword', name: 'Кинжал',         tile: TILE.DAGGER,       stack: 1, maxDurability: 96, speed: 1.5, tier: 1, damage: 4 };
+
+    // Armour items. Right now they're inventory-only collectibles (visible
+    // model + stat hooks could be added later); they don't reduce damage yet.
+    const ITEM_HELM_IRON  = ITEM_ID_BASE + 240;
+    const ITEM_CHEST_IRON = ITEM_ID_BASE + 241;
+    const ITEM_LEGS_IRON  = ITEM_ID_BASE + 242;
+    const ITEM_BOOTS_IRON = ITEM_ID_BASE + 243;
+    const ITEM_HELM_DIA   = ITEM_ID_BASE + 244;
+    const ITEM_CHEST_DIA  = ITEM_ID_BASE + 245;
+    const ITEM_LEGS_DIA   = ITEM_ID_BASE + 246;
+    const ITEM_BOOTS_DIA  = ITEM_ID_BASE + 247;
+    const ITEM_PAPER       = ITEM_ID_BASE + 248;
+    const ITEM_BOOK        = ITEM_ID_BASE + 249;
+    const ITEM_COMPASS     = ITEM_ID_BASE + 250;
+    const ITEM_CLOCK       = ITEM_ID_BASE + 251;
+    const ITEM_ENDER_PEARL = ITEM_ID_BASE + 252;
+    const ITEM_BLAZE_ROD   = ITEM_ID_BASE + 253;
+    const ITEM_FEATHER     = ITEM_ID_BASE + 254;
+    const ITEM_SLIMEBALL   = ITEM_ID_BASE + 255;
+    ITEMS[ITEM_HELM_IRON]  = { kind: 'misc', name: 'Железный шлем',     tile: TILE.HELM_IRON,  stack: 1 };
+    ITEMS[ITEM_CHEST_IRON] = { kind: 'misc', name: 'Железный нагрудник',tile: TILE.CHEST_IRON, stack: 1 };
+    ITEMS[ITEM_LEGS_IRON]  = { kind: 'misc', name: 'Железные поножи',   tile: TILE.LEGS_IRON,  stack: 1 };
+    ITEMS[ITEM_BOOTS_IRON] = { kind: 'misc', name: 'Железные ботинки',  tile: TILE.BOOTS_IRON, stack: 1 };
+    ITEMS[ITEM_HELM_DIA]   = { kind: 'misc', name: 'Алмазный шлем',     tile: TILE.HELM_DIA,   stack: 1 };
+    ITEMS[ITEM_CHEST_DIA]  = { kind: 'misc', name: 'Алмазный нагрудник',tile: TILE.CHEST_DIA,  stack: 1 };
+    ITEMS[ITEM_LEGS_DIA]   = { kind: 'misc', name: 'Алмазные поножи',   tile: TILE.LEGS_DIA,   stack: 1 };
+    ITEMS[ITEM_BOOTS_DIA]  = { kind: 'misc', name: 'Алмазные ботинки',  tile: TILE.BOOTS_DIA,  stack: 1 };
+    ITEMS[ITEM_PAPER]       = { kind: 'misc', name: 'Бумага',           tile: TILE.PAPER,       stack: 64 };
+    ITEMS[ITEM_BOOK]        = { kind: 'misc', name: 'Книга',            tile: TILE.BOOK,        stack: 16 };
+    ITEMS[ITEM_COMPASS]     = { kind: 'misc', name: 'Компас',           tile: TILE.COMPASS,     stack: 1 };
+    ITEMS[ITEM_CLOCK]       = { kind: 'misc', name: 'Часы',             tile: TILE.CLOCK,       stack: 1 };
+    ITEMS[ITEM_ENDER_PEARL] = { kind: 'misc', name: 'Сфера Эндера',     tile: TILE.ENDER_PEARL, stack: 16 };
+    ITEMS[ITEM_BLAZE_ROD]   = { kind: 'misc', name: 'Огненный жезл',    tile: TILE.BLAZE_ROD,   stack: 64 };
+    ITEMS[ITEM_FEATHER]     = { kind: 'misc', name: 'Перо',             tile: TILE.FEATHER,     stack: 64 };
+    ITEMS[ITEM_SLIMEBALL]   = { kind: 'misc', name: 'Сгусток слизи',    tile: TILE.SLIMEBALL,   stack: 64 };
     // Wheat is an ingredient, not eaten directly: keep kind=misc so it
     // doesn't trigger the eat-on-rmb hold.
     ITEMS[ITEM_WHEAT].kind = 'misc';
@@ -4909,6 +5003,140 @@
         ctx.fillRect(3, 10, 4, 1); ctx.fillRect(2, 11, 4, 1);
     }
 
+    // ---- Biome block drawers ---------------------------------------------
+    function drawRedSand(ctx) {
+        for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+            const r = tileRand(x, y, 71);
+            const v = (r % 3);
+            ctx.fillStyle = v === 0 ? '#a04018' : (v === 1 ? '#bc5424' : '#d06030');
+            ctx.fillRect(x, y, 1, 1);
+        }
+    }
+    function drawTerracotta(ctx) {
+        for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+            const r = tileRand(x, y, 73);
+            const v = (r % 5);
+            const palette = ['#9c5532', '#a86040', '#85402a', '#7c3a22', '#a86040'];
+            ctx.fillStyle = palette[v];
+            ctx.fillRect(x, y, 1, 1);
+        }
+    }
+    function drawMyceliumTop(ctx) {
+        // Purplish-grey base with red and white speckles.
+        for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+            const r = tileRand(x, y, 79);
+            const v = (r % 8);
+            ctx.fillStyle = v < 5 ? '#6e5a6a' : (v === 5 ? '#5a4658' : '#82707a');
+            ctx.fillRect(x, y, 1, 1);
+        }
+        ctx.fillStyle = '#a060a0';
+        ctx.fillRect(2, 4, 1, 1); ctx.fillRect(7, 9, 1, 1); ctx.fillRect(12, 3, 1, 1); ctx.fillRect(5, 12, 1, 1);
+        ctx.fillStyle = '#f0c0d0';
+        ctx.fillRect(2, 5, 1, 1); ctx.fillRect(7, 10, 1, 1); ctx.fillRect(12, 4, 1, 1); ctx.fillRect(5, 13, 1, 1);
+    }
+    function drawMyceliumSide(ctx) {
+        // Dirt with a thin purple band on top.
+        for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+            const r = tileRand(x, y, 12);
+            ctx.fillStyle = (r % 3 === 0) ? '#7a5430' : ((r % 3 === 1) ? '#8a6438' : '#684022');
+            ctx.fillRect(x, y, 1, 1);
+        }
+        ctx.fillStyle = '#6e5a6a';
+        ctx.fillRect(0, 0, 16, 3);
+        ctx.fillStyle = '#82707a';
+        ctx.fillRect(0, 0, 16, 1);
+        ctx.fillStyle = '#a060a0';
+        ctx.fillRect(2, 1, 1, 1); ctx.fillRect(9, 2, 1, 1);
+    }
+
+    // ---- Armour drawers ---------------------------------------------------
+    function drawHelm(ctx, body, hi, lo) {
+        ctx.fillStyle = body; ctx.fillRect(3, 3, 10, 7); ctx.fillRect(4, 10, 8, 1);
+        ctx.fillStyle = hi;   ctx.fillRect(3, 3, 10, 1); ctx.fillRect(3, 3, 1, 7);
+        ctx.fillStyle = lo;   ctx.fillRect(12, 3, 1, 7); ctx.fillRect(3, 9, 10, 1);
+        ctx.fillStyle = '#222'; ctx.fillRect(6, 6, 4, 2); // visor
+    }
+    function drawChest(ctx, body, hi, lo) {
+        ctx.fillStyle = body; ctx.fillRect(2, 4, 12, 9);
+        ctx.fillStyle = hi;   ctx.fillRect(2, 4, 12, 1); ctx.fillRect(2, 4, 1, 9);
+        ctx.fillStyle = lo;   ctx.fillRect(13, 4, 1, 9); ctx.fillRect(2, 12, 12, 1);
+        ctx.fillStyle = lo;   ctx.fillRect(7, 4, 2, 9); // breastplate seam
+        ctx.fillStyle = hi;   ctx.fillRect(4, 6, 1, 1); ctx.fillRect(11, 6, 1, 1);
+    }
+    function drawLegs(ctx, body, hi, lo) {
+        ctx.fillStyle = body; ctx.fillRect(3, 3, 10, 11);
+        ctx.fillStyle = hi;   ctx.fillRect(3, 3, 10, 1);
+        ctx.fillStyle = lo;   ctx.fillRect(7, 3, 2, 11); ctx.fillRect(3, 13, 10, 1);
+    }
+    function drawBoots(ctx, body, hi, lo) {
+        ctx.fillStyle = body; ctx.fillRect(2, 8, 5, 5); ctx.fillRect(9, 8, 5, 5);
+        ctx.fillRect(2, 12, 6, 2); ctx.fillRect(8, 12, 6, 2);
+        ctx.fillStyle = hi;   ctx.fillRect(2, 8, 5, 1); ctx.fillRect(9, 8, 5, 1);
+        ctx.fillStyle = lo;   ctx.fillRect(2, 13, 12, 1);
+    }
+    const ARMOR_PAL = {
+        iron:    { body: '#cfcfcf', hi: '#f0f0f0', lo: '#888' },
+        diamond: { body: '#5fdfff', hi: '#b8f0ff', lo: '#1c8fb8' }
+    };
+
+    // ---- Utility item drawers --------------------------------------------
+    function drawPaperIcon(ctx) {
+        ctx.fillStyle = '#f5f5e8'; ctx.fillRect(3, 2, 10, 12);
+        ctx.fillStyle = '#dcd8c0'; ctx.fillRect(3, 2, 10, 1); ctx.fillRect(3, 2, 1, 12);
+        ctx.fillStyle = '#a8a288'; ctx.fillRect(12, 2, 1, 12); ctx.fillRect(3, 13, 10, 1);
+        ctx.fillStyle = '#888'; for (let i = 0; i < 4; i++) ctx.fillRect(5, 5 + i * 2, 6, 1);
+    }
+    function drawBookIcon(ctx) {
+        ctx.fillStyle = '#7a3030'; ctx.fillRect(3, 3, 10, 11);
+        ctx.fillStyle = '#a04040'; ctx.fillRect(3, 3, 10, 1); ctx.fillRect(3, 3, 1, 11);
+        ctx.fillStyle = '#3a1010'; ctx.fillRect(12, 3, 1, 11); ctx.fillRect(3, 13, 10, 1);
+        ctx.fillStyle = '#f5f5e8'; ctx.fillRect(4, 4, 8, 9); // pages
+        ctx.fillStyle = '#bcbcbc'; for (let i = 0; i < 3; i++) ctx.fillRect(5, 6 + i * 2, 6, 1);
+        ctx.fillStyle = '#e0a020'; ctx.fillRect(7, 4, 2, 9); // bookmark
+    }
+    function drawCompassIcon(ctx) {
+        ctx.fillStyle = '#bcbcbc'; ctx.fillRect(3, 3, 10, 10); ctx.fillRect(2, 4, 12, 8);
+        ctx.fillStyle = '#dadada'; ctx.fillRect(3, 3, 10, 1);
+        ctx.fillStyle = '#888';    ctx.fillRect(3, 12, 10, 1);
+        ctx.fillStyle = '#1a1a1a'; ctx.fillRect(5, 5, 6, 6);
+        ctx.fillStyle = '#d83030'; // needle north
+        ctx.fillRect(7, 5, 2, 3);
+        ctx.fillStyle = '#dadada'; ctx.fillRect(7, 8, 2, 3);
+        ctx.fillStyle = '#fff'; ctx.fillRect(7, 7, 2, 1);
+    }
+    function drawClockIcon(ctx) {
+        ctx.fillStyle = '#e0a020'; ctx.fillRect(3, 3, 10, 10); ctx.fillRect(2, 4, 12, 8);
+        ctx.fillStyle = '#ffe070'; ctx.fillRect(3, 3, 10, 1);
+        ctx.fillStyle = '#a07810'; ctx.fillRect(3, 12, 10, 1);
+        ctx.fillStyle = '#f5f5e8'; ctx.fillRect(5, 5, 6, 6);
+        ctx.fillStyle = '#1a1a1a'; ctx.fillRect(7, 6, 1, 3); ctx.fillRect(8, 7, 2, 1);
+    }
+    function drawEnderPearl(ctx) {
+        ctx.fillStyle = '#0a3a3a'; ctx.fillRect(4, 4, 8, 8);
+        ctx.fillStyle = '#1c8fb8'; ctx.fillRect(4, 4, 8, 1); ctx.fillRect(4, 4, 1, 8);
+        ctx.fillStyle = '#062628'; ctx.fillRect(11, 4, 1, 8); ctx.fillRect(4, 11, 8, 1);
+        ctx.fillStyle = '#5fffd0'; ctx.fillRect(6, 6, 2, 2);
+        ctx.fillStyle = '#a0fff0'; ctx.fillRect(6, 6, 1, 1);
+    }
+    function drawBlazeRod(ctx) {
+        ctx.fillStyle = '#e0a020'; ctx.fillRect(7, 2, 2, 12);
+        ctx.fillStyle = '#ffe070'; ctx.fillRect(7, 2, 1, 12);
+        ctx.fillStyle = '#a06010'; ctx.fillRect(8, 2, 1, 12);
+        ctx.fillStyle = '#ff6020'; ctx.fillRect(6, 5, 1, 1); ctx.fillRect(9, 8, 1, 1); ctx.fillRect(6, 11, 1, 1);
+    }
+    function drawFeather(ctx) {
+        ctx.fillStyle = '#f5f5e8';
+        for (let i = 0; i < 12; i++) ctx.fillRect(7 - Math.floor(i / 4), 2 + i, 3 + Math.floor(i / 3), 1);
+        ctx.fillStyle = '#bcbcbc';
+        for (let i = 0; i < 12; i++) ctx.fillRect(8 - Math.floor(i / 4), 2 + i, 1, 1);
+    }
+    function drawSlimeball(ctx) {
+        ctx.fillStyle = '#5cd05c'; ctx.fillRect(4, 4, 8, 8);
+        ctx.fillStyle = '#90e090'; ctx.fillRect(4, 4, 8, 1); ctx.fillRect(4, 4, 1, 8);
+        ctx.fillStyle = '#308030'; ctx.fillRect(11, 4, 1, 8); ctx.fillRect(4, 11, 8, 1);
+        ctx.fillStyle = '#c0ffc0'; ctx.fillRect(6, 6, 2, 1);
+    }
+
     function createBlockAtlas() {
         const c = document.createElement('canvas');
         c.width = c.height = ATLAS_SIZE;
@@ -5015,7 +5243,30 @@
             [TILE.LOOTBOX_COMMON]:(ctx) => drawLootboxIcon(ctx, 0),
             [TILE.LOOTBOX_RARE]:  (ctx) => drawLootboxIcon(ctx, 1),
             [TILE.LOOTBOX_EPIC]:  (ctx) => drawLootboxIcon(ctx, 2),
-            [TILE.DAGGER]:        drawDaggerIcon
+            [TILE.DAGGER]:        drawDaggerIcon,
+
+            [TILE.RED_SAND]:      drawRedSand,
+            [TILE.TERRACOTTA]:    drawTerracotta,
+            [TILE.MYCELIUM_TOP]:  drawMyceliumTop,
+            [TILE.MYCELIUM_SIDE]: drawMyceliumSide,
+
+            [TILE.HELM_IRON]:  (ctx) => drawHelm (ctx, ARMOR_PAL.iron.body,    ARMOR_PAL.iron.hi,    ARMOR_PAL.iron.lo),
+            [TILE.CHEST_IRON]: (ctx) => drawChest(ctx, ARMOR_PAL.iron.body,    ARMOR_PAL.iron.hi,    ARMOR_PAL.iron.lo),
+            [TILE.LEGS_IRON]:  (ctx) => drawLegs (ctx, ARMOR_PAL.iron.body,    ARMOR_PAL.iron.hi,    ARMOR_PAL.iron.lo),
+            [TILE.BOOTS_IRON]: (ctx) => drawBoots(ctx, ARMOR_PAL.iron.body,    ARMOR_PAL.iron.hi,    ARMOR_PAL.iron.lo),
+            [TILE.HELM_DIA]:   (ctx) => drawHelm (ctx, ARMOR_PAL.diamond.body, ARMOR_PAL.diamond.hi, ARMOR_PAL.diamond.lo),
+            [TILE.CHEST_DIA]:  (ctx) => drawChest(ctx, ARMOR_PAL.diamond.body, ARMOR_PAL.diamond.hi, ARMOR_PAL.diamond.lo),
+            [TILE.LEGS_DIA]:   (ctx) => drawLegs (ctx, ARMOR_PAL.diamond.body, ARMOR_PAL.diamond.hi, ARMOR_PAL.diamond.lo),
+            [TILE.BOOTS_DIA]:  (ctx) => drawBoots(ctx, ARMOR_PAL.diamond.body, ARMOR_PAL.diamond.hi, ARMOR_PAL.diamond.lo),
+
+            [TILE.PAPER]:        drawPaperIcon,
+            [TILE.BOOK]:         drawBookIcon,
+            [TILE.COMPASS]:      drawCompassIcon,
+            [TILE.CLOCK]:        drawClockIcon,
+            [TILE.ENDER_PEARL]:  drawEnderPearl,
+            [TILE.BLAZE_ROD]:    drawBlazeRod,
+            [TILE.FEATHER]:      drawFeather,
+            [TILE.SLIMEBALL]:    drawSlimeball
         };
 
         for (const [k, fn] of Object.entries(drawers)) {
@@ -5408,12 +5659,19 @@
                             else data[idx] = BLOCKS.STONE;
                         } else if (y < height - 1) {
                             if (biome === 'desert') data[idx] = BLOCKS.SAND;
-                            else data[idx] = BLOCKS.DIRT;
+                            else if (biome === 'mesa') {
+                                // Layered terracotta strata under red sand.
+                                data[idx] = BLOCKS.TERRACOTTA;
+                            } else data[idx] = BLOCKS.DIRT;
                         } else if (y === height - 1) {
                             if (height < CONFIG.WATER_LEVEL + 2) data[idx] = BLOCKS.SAND;
-                            else if (biome === 'desert') data[idx] = BLOCKS.SAND;
-                            else if (biome === 'snow') data[idx] = BLOCKS.SNOW;
+                            else if (biome === 'desert')    data[idx] = BLOCKS.SAND;
+                            else if (biome === 'mesa')      data[idx] = BLOCKS.RED_SAND;
+                            else if (biome === 'mushroom')  data[idx] = BLOCKS.MYCELIUM;
+                            else if (biome === 'snow' || biome === 'ice_plains') data[idx] = BLOCKS.SNOW;
                             else data[idx] = BLOCKS.GRASS;
+                        } else if (y === height && biome === 'ice_plains' && height === CONFIG.WATER_LEVEL) {
+                            data[idx] = BLOCKS.ICE;
                         } else if (y < CONFIG.WATER_LEVEL) {
                             data[idx] = BLOCKS.WATER;
                         } else {
@@ -6026,34 +6284,48 @@
         const {x, y, z, type} = game.targetBlock;
         if (BLOCK_DATA[type]?.unbreakable) return;
 
-        // Drop item only if the held tool meets the block's requirement.
-        // Hand-mining still works for "soft" blocks (no requirement).
-        // In Creative we always drop so the player can actually pick up
-        // anything they break (Mojang Creative skips drops, but for this
-        // sandbox we keep them so the inventory fills up while you mine).
-        const dropAllowed = (game.gameMode !== 0) || canHarvest(type);
-        if (dropAllowed) {
-            // Tall grass / dead bush -> chance for wheat (Minecraft-like).
-            if (type === BLOCKS.TALL_GRASS || type === BLOCKS.DEAD_BUSH) {
-                if (Math.random() < 0.25) {
-                    spawnDroppedItem(ITEM_WHEAT, 1, x + 0.5, y + 0.5, z + 0.5);
-                }
-            } else if (type === BLOCKS.LEAVES) {
-                if (Math.random() < 0.05) {
-                    spawnDroppedItem(ITEM_APPLE, 1, x + 0.5, y + 0.5, z + 0.5);
-                }
-            } else if (type === BLOCKS.STONE && game.gameMode === 0) {
-                // Survival: stone breaks into cobble (Minecraft-like).
-                spawnDroppedBlock(x, y, z, BLOCKS.COBBLESTONE);
-            } else if (type === BLOCKS.GRASS && game.gameMode === 0) {
-                // Survival: grass breaks into dirt unless silk-touch tool used
-                // (we don't have silk-touch yet, so always dirt).
-                spawnDroppedBlock(x, y, z, BLOCKS.DIRT);
-            } else if (type === BLOCKS.COAL_ORE && game.gameMode === 0) {
-                spawnDroppedItem(ITEM_COAL, 1, x + 0.5, y + 0.5, z + 0.5);
-            } else {
-                spawnDroppedBlock(x, y, z, type);
+        // Drop policy: always drop something the player can actually pick up.
+        // Pickaxe-tier still controls the *quality* of the drop for ores —
+        // wrong tier drops the raw ore block so it isn't completely lost,
+        // but the player loses access to the smelted item until they upgrade.
+        // (This is a deliberate UX deviation from Mojang's "no drop without
+        // the right tool" rule, because users were seeing stone disappear
+        // with an empty hand and treating it as a bug.)
+        const ht = heldTool();
+        const tier = (ht && ht.def.toolType === 'pickaxe') ? ht.def.tier : 0;
+
+        // Tall grass / dead bush -> chance for wheat (Minecraft-like).
+        if (type === BLOCKS.TALL_GRASS || type === BLOCKS.DEAD_BUSH) {
+            if (Math.random() < 0.25) {
+                spawnDroppedItem(ITEM_WHEAT, 1, x + 0.5, y + 0.5, z + 0.5);
             }
+        } else if (type === BLOCKS.LEAVES) {
+            if (Math.random() < 0.05) {
+                spawnDroppedItem(ITEM_APPLE, 1, x + 0.5, y + 0.5, z + 0.5);
+            }
+        } else if (type === BLOCKS.STONE && game.gameMode === 0) {
+            // Survival: stone always drops cobble.
+            spawnDroppedBlock(x, y, z, BLOCKS.COBBLESTONE);
+        } else if (type === BLOCKS.GRASS && game.gameMode === 0) {
+            // Survival: grass always drops dirt.
+            spawnDroppedBlock(x, y, z, BLOCKS.DIRT);
+        } else if (type === BLOCKS.COAL_ORE && game.gameMode === 0) {
+            // Coal ore always drops a coal item (any pickaxe is enough).
+            spawnDroppedItem(ITEM_COAL, 1, x + 0.5, y + 0.5, z + 0.5);
+        } else if (type === BLOCKS.IRON_ORE && game.gameMode === 0) {
+            // Iron requires stone pickaxe (tier >=2) for ingot drop;
+            // otherwise drop the raw ore block.
+            if (tier >= 2) spawnDroppedItem(ITEM_IRON_INGOT, 1, x + 0.5, y + 0.5, z + 0.5);
+            else spawnDroppedBlock(x, y, z, BLOCKS.IRON_ORE);
+        } else if (type === BLOCKS.GOLD_ORE && game.gameMode === 0) {
+            if (tier >= 3) spawnDroppedItem(ITEM_GOLD_INGOT, 1, x + 0.5, y + 0.5, z + 0.5);
+            else spawnDroppedBlock(x, y, z, BLOCKS.GOLD_ORE);
+        } else if (type === BLOCKS.DIAMOND_ORE && game.gameMode === 0) {
+            if (tier >= 3) spawnDroppedItem(ITEM_DIAMOND_GEM, 1, x + 0.5, y + 0.5, z + 0.5);
+            else spawnDroppedBlock(x, y, z, BLOCKS.DIAMOND_ORE);
+        } else {
+            // Default: drop the block itself (always).
+            spawnDroppedBlock(x, y, z, type);
         }
 
         // Burst of pixel-art particles using same texture atlas.
@@ -9366,21 +9638,26 @@
     // Periodic perk tick — drain auto-feed and mining-boost timers cleanly,
     // plus apply auto-feed to the player vitals.
     setInterval(() => {
+        // Bail out if the world isn't running yet.
+        if (typeof game === 'undefined' || !game || !game.player) return;
         const p = loadPerks();
         if (p.autoFeedUntil && p.autoFeedUntil > Date.now()) {
-            if (game && game.player) {
-                game.player.hunger = Math.min(20, (game.player.hunger || 0) + 1);
-            }
+            game.player.hunger = Math.min(20, (game.player.hunger || 0) + 1);
         }
     }, 4000);
 
-    // Apply persisted maxHpBonus on game start.
+    // Apply persisted maxHpBonus on game start. The bonus is *idempotent* —
+    // we recompute maxHp from a stored base each time so reloading doesn't
+    // stack the bonus on top of itself.
     function applyPersistedPerks() {
+        if (!game || !game.player) return;
         const p = loadPerks();
-        if (p.maxHpBonus && game.player) {
-            game.player.maxHp = (game.player.maxHp || 20) + p.maxHpBonus;
-            game.player.hp = Math.min(game.player.maxHp, (game.player.hp || game.player.maxHp));
-        }
+        const base = game.player._baseMaxHp || game.player.maxHp || 20;
+        game.player._baseMaxHp = base;
+        const bonus = p.maxHpBonus || 0;
+        game.player.maxHp = base + bonus;
+        if (typeof game.player.hp !== 'number') game.player.hp = game.player.maxHp;
+        game.player.hp = Math.min(game.player.hp, game.player.maxHp);
     }
 
     // Start
