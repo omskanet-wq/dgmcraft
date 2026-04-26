@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DgmCraft — воксельная песочница</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game"></canvas>
+
+      <div id="crosshair">+</div>
+
+      <div id="hud">
+        <div id="hud-top">
+          <div id="mode-indicator">Режим: <span id="mode-name">Творчество</span></div>
+          <div id="time-indicator">День 1 · <span id="time-of-day">12:00</span></div>
+          <div id="health-bar">
+            <span class="label">HP</span>
+            <div class="bar"><div id="health-fill"></div></div>
+          </div>
+        </div>
+
+        <div id="edu-panel" class="hidden">
+          <div class="edu-title">Образовательный режим</div>
+          <div id="edu-text">Наведите перекрестие на блок, чтобы узнать о нём.</div>
+        </div>
+
+        <div id="hotbar"></div>
+      </div>
+
+      <div id="menu" class="overlay">
+        <div class="card">
+          <h1>DgmCraft</h1>
+          <p class="subtitle">Воксельная песочница в духе Minecraft</p>
+
+          <div class="modes">
+            <button class="mode-btn" data-mode="creative">
+              <strong>Творчество</strong>
+              <span>Полёт, бесконечные блоки, без урона</span>
+            </button>
+            <button class="mode-btn" data-mode="survival">
+              <strong>Выживание</strong>
+              <span>HP, гравитация, добывай ресурсы</span>
+            </button>
+            <button class="mode-btn" data-mode="education">
+              <strong>Education</strong>
+              <span>Подсказки и подписи к каждому блоку</span>
+            </button>
+          </div>
+
+          <div class="controls-help">
+            <h2>Управление</h2>
+            <ul>
+              <li><b>WASD</b> — движение</li>
+              <li><b>Пробел</b> — прыжок / лететь вверх</li>
+              <li><b>Shift</b> — присесть / лететь вниз</li>
+              <li><b>F</b> — переключить полёт (творчество)</li>
+              <li><b>ЛКМ</b> — сломать блок</li>
+              <li><b>ПКМ</b> — поставить блок</li>
+              <li><b>Колесо / 1–9</b> — выбрать блок</li>
+              <li><b>R</b> — активировать редстоун-источник</li>
+              <li><b>Esc</b> — пауза / меню</li>
+              <li><b>P</b> — сохранить мир</li>
+            </ul>
+          </div>
+
+          <button id="start-btn">Войти в мир</button>
+          <div class="footer">Сделано на Three.js · DgmCraft v0.1</div>
+        </div>
+      </div>
+
+      <div id="pause" class="overlay hidden">
+        <div class="card">
+          <h1>Пауза</h1>
+          <button id="resume-btn">Продолжить</button>
+          <button id="save-btn">Сохранить мир</button>
+          <button id="reset-btn">Сгенерировать новый мир</button>
+          <button id="back-menu-btn">В главное меню</button>
+        </div>
+      </div>
+
+      <div id="toast" class="hidden"></div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
