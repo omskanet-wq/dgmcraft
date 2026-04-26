@@ -122,6 +122,117 @@
             text-shadow: 2px 2px 0 #000;
         }
 
+        .hotbar-slot .tool-preview, .inventory-slot .tool-preview {
+            background-color: transparent !important;
+            border: none !important;
+        }
+
+        .hotbar-slot .durability, .inventory-slot .durability {
+            position: absolute;
+            left: 4px;
+            right: 4px;
+            bottom: 3px;
+            height: 4px;
+            background: rgba(0,0,0,0.55);
+            border-radius: 1px;
+            overflow: hidden;
+        }
+        .hotbar-slot .durability i, .inventory-slot .durability i {
+            display: block;
+            height: 100%;
+        }
+
+        /* Crafting panel */
+        #crafting-panel {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            display: none;
+            z-index: 95;
+            align-items: center;
+            justify-content: center;
+        }
+        #crafting-panel .panel {
+            background: #c6c6c6;
+            border: 4px solid #555;
+            padding: 18px 22px 16px 22px;
+            color: #404040;
+            font-family: 'Courier New', monospace;
+            min-width: 360px;
+            box-shadow: 4px 4px 0 #000;
+        }
+        #crafting-panel h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            text-shadow: 1px 1px 0 #fff;
+        }
+        #crafting-panel .craft-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin: 6px 0;
+            padding: 6px;
+            background: #8b8b8b;
+            border: 2px solid #555;
+        }
+        #crafting-panel .recipe-shape {
+            display: grid;
+            grid-template-columns: repeat(3, 22px);
+            grid-template-rows: repeat(3, 22px);
+            gap: 1px;
+            background: #555;
+            padding: 2px;
+        }
+        #crafting-panel .recipe-cell {
+            width: 22px;
+            height: 22px;
+            background: #5a5a5a;
+            image-rendering: pixelated;
+            background-size: contain;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        #crafting-panel .arrow { font-size: 18px; font-weight: bold; }
+        #crafting-panel .result-cell {
+            width: 36px;
+            height: 36px;
+            background: #5a5a5a;
+            border: 2px solid #555;
+            image-rendering: pixelated;
+            background-size: contain;
+            background-position: center;
+            background-repeat: no-repeat;
+            position: relative;
+        }
+        #crafting-panel .result-name {
+            flex: 1;
+            font-size: 11px;
+        }
+        #crafting-panel .craft-btn {
+            background: #777;
+            color: #fff;
+            border: 2px solid #555;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+        }
+        #crafting-panel .craft-btn:hover:not(:disabled) { background: #999; }
+        #crafting-panel .craft-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        #crafting-panel .close-btn {
+            float: right;
+            background: #777;
+            color: #fff;
+            border: 2px solid #555;
+            padding: 2px 8px;
+            cursor: pointer;
+        }
+        #crafting-list {
+            max-height: 60vh;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
         /* Debug Info - Minecraft F3 style */
         #debug-info {
             position: fixed;
@@ -989,6 +1100,7 @@
         <button class="touch-btn" id="touch-break">Break</button>
         <button class="touch-btn" id="touch-place">Place</button>
         <button class="touch-btn small" id="touch-inv">Inv</button>
+        <button class="touch-btn small" id="touch-craft">Craft</button>
         <button class="touch-btn small" id="touch-chat">Chat</button>
         <button class="touch-btn small" id="touch-redstone">R</button>
         <button class="touch-btn small" id="touch-fly">Fly</button>
@@ -1014,6 +1126,15 @@
         <h2>Inventory</h2>
         <div id="inventory-main"></div>
         <div id="inventory-hotbar"></div>
+    </div>
+</div>
+
+<!-- Crafting panel -->
+<div id="crafting-panel">
+    <div class="panel">
+        <button class="close-btn" id="crafting-close">X</button>
+        <h3>Крафт</h3>
+        <div id="crafting-list"></div>
     </div>
 </div>
 
@@ -1570,6 +1691,7 @@
             debugVisible: false,
             paused: false,
             inventory: false,
+            crafting: false,
             inGame: false
         },
 
@@ -2131,10 +2253,44 @@
         block.visible = false;
         armGroup.add(block);
 
+        // Tool plane (holds the inventory icon as a billboard sprite, the
+        // way Mojang renders held tools).
+        const toolGeo = new THREE.PlaneGeometry(0.4, 0.4);
+        // Each tool tile shares the atlas, so the texture is set when
+        // updateHeldBlock detects a tool. Start with a placeholder material.
+        const toolMat = new THREE.MeshBasicMaterial({
+            map: atlasTexture, transparent: true, alphaTest: 0.4,
+            side: THREE.DoubleSide
+        });
+        const tool = new THREE.Mesh(toolGeo, toolMat);
+        tool.position.set(0.05, -0.1, -0.45);
+        tool.rotation.z = Math.PI / 4; // diagonal hold
+        tool.visible = false;
+        armGroup.add(tool);
+
         game.heldBlock = armGroup;
         game.heldBlockMesh = block;
-        game.heldArmParts = [arm]; // Store arm parts
+        game.heldToolMesh = tool;
+        game.heldArmParts = [arm];
         game.heldBlock.visible = true;
+    }
+
+    // Returns geometry UVs that show ONLY the given atlas tile on a plane.
+    function setPlaneToTile(plane, tileIdx) {
+        const col = tileIdx % ATLAS_COLS;
+        const row = Math.floor(tileIdx / ATLAS_COLS);
+        const eps = 0.5 / ATLAS_SIZE;
+        const u0 = col / ATLAS_COLS + eps;
+        const u1 = (col + 1) / ATLAS_COLS - eps;
+        const v0 = 1 - (row + 1) / ATLAS_COLS + eps;
+        const v1 = 1 - row / ATLAS_COLS - eps;
+        const uv = plane.geometry.attributes.uv;
+        // PlaneGeometry vertex order: (0,1), (1,1), (0,0), (1,0)
+        uv.setXY(0, u0, v1);
+        uv.setXY(1, u1, v1);
+        uv.setXY(2, u0, v0);
+        uv.setXY(3, u1, v0);
+        uv.needsUpdate = true;
     }
 
     function updateHeldBlock() {
@@ -2142,19 +2298,29 @@
         const blockType = item.type;
         const count = item.count;
 
-        if (!blockType || count <= 0) {
-            // Show arm, hide block
-            game.heldBlockMesh.visible = false;
+        // Reset all three modes; show one based on what's held.
+        game.heldArmParts.forEach(part => part.visible = false);
+        game.heldBlockMesh.visible = false;
+        if (game.heldToolMesh) game.heldToolMesh.visible = false;
+
+        if (!blockType || (count <= 0 && !isItemId(blockType))) {
             game.heldArmParts.forEach(part => part.visible = true);
+        } else if (isItemId(blockType)) {
+            const def = getItemDef(blockType);
+            if (def && game.heldToolMesh) {
+                setPlaneToTile(game.heldToolMesh, def.tile);
+                game.heldToolMesh.material.map = atlasTexture;
+                game.heldToolMesh.material.needsUpdate = true;
+                game.heldToolMesh.visible = true;
+            } else {
+                game.heldArmParts.forEach(part => part.visible = true);
+            }
         } else {
             const data = BLOCK_DATA[blockType];
             if (data) {
-                // Hide arm, show block
-                game.heldArmParts.forEach(part => part.visible = false);
                 game.heldBlockMesh.material.color.setHex(data.top);
                 game.heldBlockMesh.visible = true;
             } else {
-                game.heldBlockMesh.visible = false;
                 game.heldArmParts.forEach(part => part.visible = true);
             }
         }
@@ -2172,11 +2338,14 @@
         if (game.input.swinging) {
             const swingProgress = (performance.now() - game.input.swingStart) / 300; // 300ms swing
             if (swingProgress < 1) {
-                // Swing DOWN and forward - moderate amount
                 const swing = Math.sin(swingProgress * Math.PI);
-                game.heldBlock.rotation.x -= swing * 0.6; // Уменьшено с 1.2 до 0.6
-                game.heldBlock.position.y -= swing * 0.15; // Уменьшено с 0.3 до 0.15
-                game.heldBlock.position.z -= swing * 0.15; // Уменьшено с 0.2 до 0.15
+                // Tools get a wider arc than a bare hand or block.
+                const isTool = isItemId(blockType);
+                const arc = isTool ? 1.0 : 0.6;
+                game.heldBlock.rotation.x -= swing * arc;
+                game.heldBlock.rotation.z -= swing * (isTool ? 0.4 : 0);
+                game.heldBlock.position.y -= swing * 0.15;
+                game.heldBlock.position.z -= swing * 0.15;
             } else {
                 game.input.swinging = false;
             }
@@ -2208,7 +2377,20 @@
 
         // If holding left mouse, increase breaking progress
         if (game.input.mouseDown) {
-            game.breaking.progress += dt * 2; // Break speed
+            // Compute mining speed multiplier from held tool vs block.
+            const blockId = t.type;
+            const req = BLOCK_MINING_REQUIREMENT[blockId];
+            const ht = heldTool();
+            let mult = 2; // bare-hand baseline
+            if (ht) {
+                const correctTool = req && ht.def.toolType === req.tool;
+                const tierOK = !req || ht.def.tier >= req.tier;
+                if (correctTool && tierOK) mult = ht.def.speed;
+                else if (ht.def.toolType === 'sword') mult = 1.5; // sword is slow
+            } else if (req) {
+                mult = 0.6; // hand-breaking ore is even slower (no drop anyway)
+            }
+            game.breaking.progress += dt * mult;
 
             // Show breaking overlay
             if (game.breaking.mesh) {
@@ -2450,30 +2632,37 @@
             if (mode === 0) {
                 game.gameMode = 0;
                 addChatMessage('Set gamemode to Survival', 'success');
-                // Clear hotbar in survival
+                // Survival starter kit: wooden tools + a stack of planks so you
+                // can immediately farm wood / stone / build something.
                 HOTBAR_ITEMS.forEach(item => {
-                    item.type = null;
-                    item.count = 0;
+                    item.type = null; item.count = 0; item.durability = null;
                 });
+                HOTBAR_ITEMS[0] = {type: toolItemId('pickaxe', 'wood'), count: 1, durability: TOOL_MAX_DURABILITY.wood};
+                HOTBAR_ITEMS[1] = {type: toolItemId('axe', 'wood'),     count: 1, durability: TOOL_MAX_DURABILITY.wood};
+                HOTBAR_ITEMS[2] = {type: toolItemId('shovel', 'wood'),  count: 1, durability: TOOL_MAX_DURABILITY.wood};
+                HOTBAR_ITEMS[3] = {type: toolItemId('sword', 'wood'),   count: 1, durability: TOOL_MAX_DURABILITY.wood};
+                HOTBAR_ITEMS[4] = {type: BLOCKS.PLANKS, count: 16};
+                HOTBAR_ITEMS[5] = {type: ITEM_STICK, count: 8};
                 setupHotbar();
                 setupInventory();
-                updateHUDVisibility(); // Добавьте эту строку
+                updateHUDVisibility();
             } else if (mode === 1) {
                 game.gameMode = 1;
                 addChatMessage('Set gamemode to Creative', 'success');
-                // Fill hotbar with blocks in creative (64 each)
+                // Fill hotbar with blocks in creative (64 each), plus a
+                // diamond pickaxe and sword for testing tool features.
                 HOTBAR_ITEMS[0] = {type: BLOCKS.GRASS, count: 64};
-                HOTBAR_ITEMS[1] = {type: BLOCKS.DIRT, count: 64};
-                HOTBAR_ITEMS[2] = {type: BLOCKS.STONE, count: 64};
-                HOTBAR_ITEMS[3] = {type: BLOCKS.COBBLESTONE, count: 64};
-                HOTBAR_ITEMS[4] = {type: BLOCKS.WOOD, count: 64};
-                HOTBAR_ITEMS[5] = {type: BLOCKS.PLANKS, count: 64};
-                HOTBAR_ITEMS[6] = {type: BLOCKS.BRICK, count: 64};
-                HOTBAR_ITEMS[7] = {type: BLOCKS.GLASS, count: 64};
-                HOTBAR_ITEMS[8] = {type: BLOCKS.SAND, count: 64};
+                HOTBAR_ITEMS[1] = {type: BLOCKS.STONE, count: 64};
+                HOTBAR_ITEMS[2] = {type: BLOCKS.WOOD, count: 64};
+                HOTBAR_ITEMS[3] = {type: BLOCKS.PLANKS, count: 64};
+                HOTBAR_ITEMS[4] = {type: BLOCKS.GLASS, count: 64};
+                HOTBAR_ITEMS[5] = {type: BLOCKS.SAND, count: 64};
+                HOTBAR_ITEMS[6] = {type: ITEM_STICK, count: 64};
+                HOTBAR_ITEMS[7] = {type: toolItemId('pickaxe', 'diamond'), count: 1, durability: TOOL_MAX_DURABILITY.diamond};
+                HOTBAR_ITEMS[8] = {type: toolItemId('sword', 'diamond'),   count: 1, durability: TOOL_MAX_DURABILITY.diamond};
                 setupHotbar();
                 setupInventory();
-                updateHUDVisibility(); // Добавьте эту строку
+                updateHUDVisibility();
             } else if (mode === 2) {
                 game.gameMode = 2;
                 addChatMessage('Set gamemode to Education', 'success');
@@ -2681,6 +2870,53 @@
         game.scene.add(game.highlightBox);
     }
 
+    // Icon URL cache: items rendered from the atlas to a small data URL.
+    const _itemIconCache = {};
+    function itemIconURL(itemId) {
+        if (_itemIconCache[itemId]) return _itemIconCache[itemId];
+        const def = getItemDef(itemId);
+        if (!def || !atlasCanvas) return '';
+        const tileIdx = def.tile;
+        const col = tileIdx % ATLAS_COLS;
+        const row = Math.floor(tileIdx / ATLAS_COLS);
+        const c = document.createElement('canvas');
+        c.width = c.height = 32;
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(atlasCanvas, col * ATLAS_TILE, row * ATLAS_TILE,
+                      ATLAS_TILE, ATLAS_TILE, 0, 0, 32, 32);
+        return (_itemIconCache[itemId] = c.toDataURL());
+    }
+
+    // HTML for a slot preview, handles both blocks and items.
+    function slotPreviewHTML(typeId) {
+        if (isItemId(typeId)) {
+            const url = itemIconURL(typeId);
+            return `<div class="block-preview tool-preview" style="background-image:url('${url}');background-size:contain;background-position:center;background-repeat:no-repeat"></div>`;
+        }
+        const data = BLOCK_DATA[typeId];
+        if (!data) return '';
+        return `<div class="block-preview" style="background: #${data.top.toString(16).padStart(6, '0')}"></div>`;
+    }
+
+    // Slot label: count for stackables, durability bar for tools.
+    function slotLabelHTML(slot) {
+        const t = slot.type;
+        if (isItemId(t)) {
+            const def = getItemDef(t);
+            if (def && def.kind === 'tool' && slot.durability != null) {
+                const pct = Math.max(0, slot.durability) / def.maxDurability;
+                const colour = pct > 0.5 ? '#4caf50' : pct > 0.2 ? '#ffb83b' : '#e74c3c';
+                return `<div class="durability"><i style="width:${(pct * 100).toFixed(0)}%;background:${colour}"></i></div>`;
+            }
+            // Misc items show a stack count.
+            if (slot.count > 1) return `<div class="slot-number">${slot.count}</div>`;
+            return '';
+        }
+        if (slot.count > 0) return `<div class="slot-number">${slot.count}</div>`;
+        return '';
+    }
+
     function setupHotbar() {
         const hotbar = document.getElementById('hotbar');
         hotbar.innerHTML = '';
@@ -2690,15 +2926,11 @@
             slot.className = 'hotbar-slot' + (i === game.ui.selectedSlot ? ' selected' : '');
 
             const item = HOTBAR_ITEMS[i];
-            const blockType = item.type;
-            const count = item.count;
-            const data = blockType ? BLOCK_DATA[blockType] : null;
+            const t = item.type;
+            const visible = t != null && (item.count > 0 || isItemId(t));
 
-            if (data && count > 0) {
-                slot.innerHTML = `
-                <div class="block-preview" style="background: #${data.top.toString(16).padStart(6, '0')}"></div>
-                <div class="slot-number">${count}</div>
-            `;
+            if (visible) {
+                slot.innerHTML = slotPreviewHTML(t) + slotLabelHTML(item);
             }
 
             slot.onclick = () => {
@@ -2977,7 +3209,20 @@
         WATER: 30,     LAVA: 31,
         FLOWER_RED: 32, FLOWER_YELLOW: 33,
         MUSHROOM_RED: 34, MUSHROOM_BROWN: 35,
-        DEAD_BUSH: 36, TALL_GRASS: 37
+        DEAD_BUSH: 36, TALL_GRASS: 37,
+
+        // Tools and items occupy rows 3+ of the atlas (idx 48..).
+        STICK: 48,
+        // Pickaxes
+        PICK_WOOD: 49, PICK_STONE: 50, PICK_IRON: 51, PICK_GOLD: 52, PICK_DIAMOND: 53,
+        // Axes
+        AXE_WOOD: 54,  AXE_STONE: 55,  AXE_IRON: 56,  AXE_GOLD: 57,  AXE_DIAMOND: 58,
+        // Shovels
+        SHOVEL_WOOD: 59, SHOVEL_STONE: 60, SHOVEL_IRON: 61, SHOVEL_GOLD: 62, SHOVEL_DIAMOND: 63,
+        // Swords
+        SWORD_WOOD: 64,  SWORD_STONE: 65,  SWORD_IRON: 66,  SWORD_GOLD: 67,  SWORD_DIAMOND: 68,
+        // Hoes
+        HOE_WOOD: 69,    HOE_STONE: 70,    HOE_IRON: 71,    HOE_GOLD: 72,    HOE_DIAMOND: 73
     };
 
     // Per-block, per-face tile lookup. {top, side, bottom} optional; defaults
@@ -3019,6 +3264,103 @@
         [BLOCKS.MUSHROOM_RED]: { all: TILE.MUSHROOM_RED },
         [BLOCKS.MUSHROOM_BROWN]:{ all: TILE.MUSHROOM_BROWN }
     };
+
+    // ---- ITEMS (tools / sticks) ----
+    // Item IDs live in a separate numeric range so they never collide with
+    // BLOCKS.* (max ~50). Slots store .type as either a block id OR an item id;
+    // is-item check: type >= ITEM_ID_BASE.
+    const ITEM_ID_BASE = 1000;
+    const ITEMS = {};
+
+    const ITEM_STICK = ITEM_ID_BASE + 0;
+    ITEMS[ITEM_STICK] = {
+        kind: 'misc', name: 'Палка', tile: TILE.STICK, stack: 64
+    };
+
+    // Tool encoding: 1000 + 1 + toolType*10 + materialIdx
+    const TOOL_TYPES = ['pickaxe', 'axe', 'shovel', 'sword', 'hoe'];
+    const TOOL_MATS  = ['wood', 'stone', 'iron', 'gold', 'diamond'];
+    const TOOL_TYPE_LABEL = { pickaxe: 'Кирка', axe: 'Топор', shovel: 'Лопата', sword: 'Меч', hoe: 'Мотыга' };
+    const TOOL_MAT_LABEL  = { wood: 'Деревянная', stone: 'Каменная', iron: 'Железная', gold: 'Золотая', diamond: 'Алмазная' };
+    const TOOL_TILE_BASE = {
+        pickaxe: TILE.PICK_WOOD,
+        axe:     TILE.AXE_WOOD,
+        shovel:  TILE.SHOVEL_WOOD,
+        sword:   TILE.SWORD_WOOD,
+        hoe:     TILE.HOE_WOOD
+    };
+    // Mojang-ish numbers for durability so progression feels familiar.
+    const TOOL_MAX_DURABILITY = { wood: 60, stone: 132, iron: 251, gold: 33, diamond: 1562 };
+    // Mining speed multiplier when the right tool is used.
+    const TOOL_SPEED          = { wood: 2,  stone: 4,   iron: 6,   gold: 12, diamond: 8 };
+    // Tier for breaking ores (block-tier; tool tier must be >=).
+    const TOOL_TIER           = { wood: 1, stone: 2, iron: 3, gold: 1, diamond: 4 };
+    // Sword damage multipliers (mob hits).
+    const SWORD_DAMAGE        = { wood: 5, stone: 6, iron: 7, gold: 5, diamond: 8 };
+
+    function toolItemId(toolType, mat) {
+        const t = TOOL_TYPES.indexOf(toolType);
+        const m = TOOL_MATS.indexOf(mat);
+        if (t < 0 || m < 0) return null;
+        return ITEM_ID_BASE + 1 + t * 10 + m;
+    }
+
+    for (const tt of TOOL_TYPES) {
+        for (const mm of TOOL_MATS) {
+            const id = toolItemId(tt, mm);
+            ITEMS[id] = {
+                kind: 'tool',
+                toolType: tt,
+                material: mm,
+                name: TOOL_MAT_LABEL[mm] + ' ' + TOOL_TYPE_LABEL[tt].toLowerCase(),
+                tile: TOOL_TILE_BASE[tt] + TOOL_MATS.indexOf(mm),
+                maxDurability: TOOL_MAX_DURABILITY[mm],
+                speed: TOOL_SPEED[mm],
+                tier: TOOL_TIER[mm],
+                damage: tt === 'sword' ? SWORD_DAMAGE[mm] : (tt === 'axe' ? Math.max(3, SWORD_DAMAGE[mm] - 2) : 2),
+                stack: 1
+            };
+        }
+    }
+
+    function isItemId(id) {
+        return id != null && id >= ITEM_ID_BASE;
+    }
+
+    function getItemDef(id) {
+        return ITEMS[id] || null;
+    }
+
+    // Which block kinds need which tool to drop themselves; otherwise no drop.
+    // Maps block -> { tool: 'pickaxe'|'axe'|'shovel'|null, tier: 1..4 }.
+    const BLOCK_MINING_REQUIREMENT = {};
+    function setMiningReq(blockId, tool, tier) {
+        if (blockId == null) return;
+        BLOCK_MINING_REQUIREMENT[blockId] = { tool, tier: tier || 1 };
+    }
+    setMiningReq(BLOCKS.STONE,        'pickaxe', 1);
+    setMiningReq(BLOCKS.COBBLESTONE,  'pickaxe', 1);
+    setMiningReq(BLOCKS.COAL_ORE,     'pickaxe', 1);
+    setMiningReq(BLOCKS.IRON_ORE,     'pickaxe', 2);
+    setMiningReq(BLOCKS.GOLD_ORE,     'pickaxe', 3);
+    setMiningReq(BLOCKS.DIAMOND_ORE,  'pickaxe', 3);
+    setMiningReq(BLOCKS.BRICK,        'pickaxe', 1);
+    setMiningReq(BLOCKS.SANDSTONE,    'pickaxe', 1);
+    setMiningReq(BLOCKS.GLOWSTONE,    'pickaxe', 1);
+    setMiningReq(BLOCKS.CLAY,         'shovel',  1);
+    setMiningReq(BLOCKS.GLASS,        'pickaxe', 1);
+    setMiningReq(BLOCKS.ICE,          'pickaxe', 1);
+    setMiningReq(BLOCKS.REDSTONE_LAMP_OFF, 'pickaxe', 1);
+    setMiningReq(BLOCKS.REDSTONE_LAMP_ON,  'pickaxe', 1);
+
+    setMiningReq(BLOCKS.WOOD,    'axe', 1);
+    setMiningReq(BLOCKS.PLANKS,  'axe', 1);
+
+    setMiningReq(BLOCKS.DIRT,    'shovel', 1);
+    setMiningReq(BLOCKS.GRASS,   'shovel', 1);
+    setMiningReq(BLOCKS.SAND,    'shovel', 1);
+    setMiningReq(BLOCKS.GRAVEL,  'shovel', 1);
+    setMiningReq(BLOCKS.SNOW,    'shovel', 1);
 
     function blockTile(blockId, face) {
         const m = BLOCK_FACE_TILE[blockId];
@@ -3494,6 +3836,181 @@
         }
     }
 
+    // ---- TOOLS & ITEMS ----
+    // The classic Minecraft inventory icon for a tool is a 16x16 pixel sprite
+    // held diagonally: stick/handle from bottom-left, head in upper-right.
+
+    function drawStickIcon(ctx) {
+        // Diagonal handle, bottom-left to upper-right.
+        const dark = '#5b3f1c';
+        const mid = '#8b6126';
+        const light = '#c39458';
+        for (let i = 0; i < 14; i++) {
+            const x = 1 + i, y = 14 - i;
+            ctx.fillStyle = mid;
+            ctx.fillRect(x, y, 2, 2);
+        }
+        for (let i = 0; i < 14; i++) {
+            const x = 1 + i, y = 14 - i;
+            ctx.fillStyle = light;
+            ctx.fillRect(x, y, 1, 1);
+        }
+        for (let i = 0; i < 14; i++) {
+            const x = 2 + i, y = 15 - i;
+            ctx.fillStyle = dark;
+            ctx.fillRect(x, y, 1, 1);
+        }
+    }
+
+    // A helper that draws a Minecraft-style diagonal handle ending around (8,7).
+    function drawToolHandle(ctx) {
+        const dark = '#5b3f1c';
+        const mid = '#8b6126';
+        const light = '#c39458';
+        // Handle goes from (1,14) to (8,7) — 8 steps.
+        for (let i = 0; i < 8; i++) {
+            const x = 1 + i, y = 14 - i;
+            ctx.fillStyle = mid;
+            ctx.fillRect(x, y, 2, 2);
+        }
+        for (let i = 0; i < 8; i++) {
+            const x = 1 + i, y = 14 - i;
+            ctx.fillStyle = light;
+            ctx.fillRect(x, y, 1, 1);
+        }
+        for (let i = 0; i < 8; i++) {
+            const x = 2 + i, y = 15 - i;
+            ctx.fillStyle = dark;
+            ctx.fillRect(x, y, 1, 1);
+        }
+    }
+
+    // Material colour palettes (head/light/dark).
+    const TOOL_MAT_PALETTE = {
+        wood:    { mid: '#a87a3c', light: '#cd9d5d', dark: '#6e4a1c' },
+        stone:   { mid: '#7d7d7d', light: '#a8a8a8', dark: '#4d4d4d' },
+        iron:    { mid: '#d8d8d8', light: '#f3f3f3', dark: '#9a9a9a' },
+        gold:    { mid: '#f8d52f', light: '#fff09a', dark: '#b18b00' },
+        diamond: { mid: '#5decf5', light: '#a8f7fb', dark: '#2bb4be' }
+    };
+
+    function fillRect3D(ctx, x, y, w, h, p) {
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(x, y, w, 1);
+        ctx.fillRect(x, y, 1, h);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(x + w - 1, y, 1, h);
+        ctx.fillRect(x, y + h - 1, w, 1);
+    }
+
+    function drawPickaxeIcon(ctx, mat) {
+        drawToolHandle(ctx);
+        const p = TOOL_MAT_PALETTE[mat];
+        // Wide head with two prongs at top-right.
+        // head body 4-12 wide, 2-5 tall
+        fillRect3D(ctx, 5, 2, 9, 3, p);
+        // Prongs (corners up):
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(4, 1, 2, 1); ctx.fillRect(13, 1, 2, 1);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(4, 1, 1, 1); ctx.fillRect(13, 1, 1, 1);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(5, 1, 1, 1); ctx.fillRect(14, 1, 1, 1);
+        // Tip below the head joining the handle.
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(8, 5, 2, 2);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(9, 6, 1, 1);
+    }
+
+    function drawAxeIcon(ctx, mat) {
+        drawToolHandle(ctx);
+        const p = TOOL_MAT_PALETTE[mat];
+        // Axe head: large block on the right side with a curved/tapered edge.
+        fillRect3D(ctx, 8, 1, 6, 6, p);
+        // Cut-out on lower-left for diagonal blade.
+        ctx.clearRect(8, 6, 1, 1);
+        // Edge highlights along right side (the blade).
+        ctx.fillStyle = p.light;
+        ctx.fillRect(13, 1, 1, 6);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(8, 6, 5, 1);
+        // Handle joint
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(7, 5, 2, 2);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(7, 5, 1, 1);
+    }
+
+    function drawShovelIcon(ctx, mat) {
+        drawToolHandle(ctx);
+        const p = TOOL_MAT_PALETTE[mat];
+        // Long narrow blade pointing up-right.
+        fillRect3D(ctx, 9, 1, 4, 5, p);
+        // Tapered tip.
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(10, 0, 2, 1);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(10, 0, 1, 1);
+        // Handle joint
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(8, 5, 2, 2);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(9, 6, 1, 1);
+    }
+
+    function drawSwordIcon(ctx, mat) {
+        const p = TOOL_MAT_PALETTE[mat];
+        // Hilt (handle) — short, brown.
+        ctx.fillStyle = '#8b6126';
+        ctx.fillRect(2, 13, 2, 2);
+        ctx.fillStyle = '#c39458';
+        ctx.fillRect(2, 13, 1, 1);
+        ctx.fillStyle = '#5b3f1c';
+        ctx.fillRect(3, 14, 1, 1);
+        // Crossguard (gold-ish always for wood hilt; matches material on metal).
+        const cg = mat === 'wood' || mat === 'stone' ? '#a87a3c' : p.dark;
+        ctx.fillStyle = cg;
+        ctx.fillRect(3, 12, 4, 1);
+        ctx.fillRect(2, 11, 2, 1);
+        ctx.fillRect(5, 11, 2, 1);
+        // Long blade going to upper-right.
+        for (let i = 0; i < 10; i++) {
+            const x = 4 + i, y = 11 - i;
+            if (x < 16 && y >= 0) {
+                ctx.fillStyle = p.mid;
+                ctx.fillRect(x, y, 2, 2);
+                ctx.fillStyle = p.light;
+                ctx.fillRect(x, y, 1, 1);
+                ctx.fillStyle = p.dark;
+                ctx.fillRect(x + 1, y + 1, 1, 1);
+            }
+        }
+        // Pointed tip.
+        ctx.fillStyle = p.light;
+        ctx.fillRect(13, 1, 1, 1);
+        ctx.fillRect(14, 0, 1, 1);
+    }
+
+    function drawHoeIcon(ctx, mat) {
+        drawToolHandle(ctx);
+        const p = TOOL_MAT_PALETTE[mat];
+        // L-shape: short horizontal piece + downward arm.
+        fillRect3D(ctx, 9, 1, 5, 2, p);
+        // Down arm joining the handle.
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(13, 3, 2, 2);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(14, 3, 1, 2);
+        // Connector to handle
+        ctx.fillStyle = p.mid;
+        ctx.fillRect(8, 5, 2, 2);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(8, 5, 1, 1);
+    }
+
     function createBlockAtlas() {
         const c = document.createElement('canvas');
         c.width = c.height = ATLAS_SIZE;
@@ -3538,7 +4055,39 @@
             [TILE.MUSHROOM_RED]: (ctx) => drawDecoration(ctx, drawMushroomRed),
             [TILE.MUSHROOM_BROWN]: (ctx) => drawDecoration(ctx, drawMushroomBrown),
             [TILE.DEAD_BUSH]: (ctx) => drawDecoration(ctx, drawDeadBush),
-            [TILE.TALL_GRASS]: (ctx) => drawDecoration(ctx, drawTallGrass)
+            [TILE.TALL_GRASS]: (ctx) => drawDecoration(ctx, drawTallGrass),
+
+            [TILE.STICK]: drawStickIcon,
+
+            [TILE.PICK_WOOD]:    (ctx) => drawPickaxeIcon(ctx, 'wood'),
+            [TILE.PICK_STONE]:   (ctx) => drawPickaxeIcon(ctx, 'stone'),
+            [TILE.PICK_IRON]:    (ctx) => drawPickaxeIcon(ctx, 'iron'),
+            [TILE.PICK_GOLD]:    (ctx) => drawPickaxeIcon(ctx, 'gold'),
+            [TILE.PICK_DIAMOND]: (ctx) => drawPickaxeIcon(ctx, 'diamond'),
+
+            [TILE.AXE_WOOD]:    (ctx) => drawAxeIcon(ctx, 'wood'),
+            [TILE.AXE_STONE]:   (ctx) => drawAxeIcon(ctx, 'stone'),
+            [TILE.AXE_IRON]:    (ctx) => drawAxeIcon(ctx, 'iron'),
+            [TILE.AXE_GOLD]:    (ctx) => drawAxeIcon(ctx, 'gold'),
+            [TILE.AXE_DIAMOND]: (ctx) => drawAxeIcon(ctx, 'diamond'),
+
+            [TILE.SHOVEL_WOOD]:    (ctx) => drawShovelIcon(ctx, 'wood'),
+            [TILE.SHOVEL_STONE]:   (ctx) => drawShovelIcon(ctx, 'stone'),
+            [TILE.SHOVEL_IRON]:    (ctx) => drawShovelIcon(ctx, 'iron'),
+            [TILE.SHOVEL_GOLD]:    (ctx) => drawShovelIcon(ctx, 'gold'),
+            [TILE.SHOVEL_DIAMOND]: (ctx) => drawShovelIcon(ctx, 'diamond'),
+
+            [TILE.SWORD_WOOD]:    (ctx) => drawSwordIcon(ctx, 'wood'),
+            [TILE.SWORD_STONE]:   (ctx) => drawSwordIcon(ctx, 'stone'),
+            [TILE.SWORD_IRON]:    (ctx) => drawSwordIcon(ctx, 'iron'),
+            [TILE.SWORD_GOLD]:    (ctx) => drawSwordIcon(ctx, 'gold'),
+            [TILE.SWORD_DIAMOND]: (ctx) => drawSwordIcon(ctx, 'diamond'),
+
+            [TILE.HOE_WOOD]:    (ctx) => drawHoeIcon(ctx, 'wood'),
+            [TILE.HOE_STONE]:   (ctx) => drawHoeIcon(ctx, 'stone'),
+            [TILE.HOE_IRON]:    (ctx) => drawHoeIcon(ctx, 'iron'),
+            [TILE.HOE_GOLD]:    (ctx) => drawHoeIcon(ctx, 'gold'),
+            [TILE.HOE_DIAMOND]: (ctx) => drawHoeIcon(ctx, 'diamond')
         };
 
         for (const [k, fn] of Object.entries(drawers)) {
@@ -4483,13 +5032,54 @@
         }
     }
 
+    // Inspect held item: returns the tool def + slot if a tool is selected,
+    // otherwise null.
+    function heldTool() {
+        const slot = HOTBAR_ITEMS[game.ui.selectedSlot];
+        if (!slot || !isItemId(slot.type)) return null;
+        const def = getItemDef(slot.type);
+        if (!def || def.kind !== 'tool') return null;
+        return { slot, def };
+    }
+
+    // Returns true if the player can drop the block (right tool & tier).
+    function canHarvest(blockId) {
+        const req = BLOCK_MINING_REQUIREMENT[blockId];
+        if (!req) return true; // No requirement → always drops
+        const ht = heldTool();
+        if (!ht) return false;
+        if (ht.def.toolType !== req.tool) return false;
+        if (ht.def.tier < req.tier) return false;
+        return true;
+    }
+
+    // Damage the held tool by `n` durability, breaking it at 0.
+    function damageHeldTool(n) {
+        const ht = heldTool();
+        if (!ht) return;
+        ht.slot.durability = (ht.slot.durability == null
+            ? ht.def.maxDurability
+            : ht.slot.durability) - n;
+        if (ht.slot.durability <= 0) {
+            ht.slot.type = null;
+            ht.slot.count = 0;
+            ht.slot.durability = null;
+            if (typeof audio !== 'undefined') audio.blockBreak(BLOCKS.PLANKS);
+            addChatMessage('§cИнструмент сломался', 'normal');
+        }
+        setupHotbar();
+    }
+
     function breakBlock() {
         if (!game.targetBlock) return;
         const {x, y, z, type} = game.targetBlock;
         if (BLOCK_DATA[type]?.unbreakable) return;
 
-        // Spawn dropped item at block position
-        spawnDroppedBlock(x, y, z, type);
+        // Drop item only if the held tool meets the block's requirement.
+        // Hand-mining still works for "soft" blocks (no requirement).
+        if (canHarvest(type)) {
+            spawnDroppedBlock(x, y, z, type);
+        }
 
         // Burst of pixel-art particles using same texture atlas.
         spawnBlockBreakParticles(type, x, y, z);
@@ -4498,6 +5088,9 @@
         if (typeof audio !== 'undefined') audio.blockBreak(type);
 
         setBlock(x, y, z, BLOCKS.AIR);
+
+        // Wear the tool (one durability point per block, only in survival).
+        if (game.gameMode === 0) damageHeldTool(1);
 
         // Trigger swing animation
         game.input.swinging = true;
@@ -4542,6 +5135,7 @@
         const item = HOTBAR_ITEMS[game.ui.selectedSlot];
         const block = item.type;
         if (!block || item.count <= 0) return; // No block in hand
+        if (isItemId(block)) return; // Tools / sticks can't be placed
 
         const {x, y, z} = game.placePos;
 
@@ -4668,6 +5262,11 @@
                 toggleInventory();
             }
 
+            // Crafting panel
+            if (e.code === 'KeyC' && !e.repeat && !game.chat.open && !game.ui.paused && !game.ui.inventory) {
+                toggleCrafting();
+            }
+
             // Redstone source toggle
             if (e.code === 'KeyR' && !e.repeat) {
                 if (toggleRedstoneSource()) {
@@ -4684,7 +5283,8 @@
 
             // Pause
             if (e.code === 'Escape') {
-                if (game.ui.inventory) toggleInventory();
+                if (game.ui.crafting) toggleCrafting(false);
+                else if (game.ui.inventory) toggleInventory();
                 else togglePause();
             }
         });
@@ -4773,6 +5373,291 @@
         document.getElementById('inventory-screen').classList.toggle('visible', game.ui.inventory);
         if (game.ui.inventory) document.exitPointerLock();
         else game.renderer.domElement.requestPointerLock();
+    }
+
+    // ============================================================================
+    // CRAFTING SYSTEM
+    // ============================================================================
+    // Recipes are simplified: instead of placing into a 3x3 grid manually, the
+    // panel lists every recipe and a "Craft" button checks the inventory and
+    // performs the substitution. The recipe shape is shown for visual fidelity.
+    //
+    // Each recipe: { result: itemId|blockId, count, ingredients: [{type,count}],
+    //                shape: 3x3 (item or null per cell, for visual only) }
+
+    const RECIPES = [];
+
+    function addToolRecipe(toolType, mat, materialItem) {
+        // The Mojang shape: 3 mat blocks across the top row, 2 sticks in the
+        // middle column. Shape rows 0..2, cols 0..2 (left -> right, top down).
+        const shape = [
+            [materialItem, materialItem, materialItem],
+            [null, ITEM_STICK, null],
+            [null, ITEM_STICK, null]
+        ];
+        if (toolType === 'shovel') {
+            shape[0] = [null, materialItem, null];
+        } else if (toolType === 'sword') {
+            shape[0] = [null, materialItem, null];
+            shape[1] = [null, materialItem, null];
+            shape[2] = [null, ITEM_STICK,  null];
+        } else if (toolType === 'hoe') {
+            shape[0] = [materialItem, materialItem, null];
+        } else if (toolType === 'axe') {
+            shape[0] = [materialItem, materialItem, null];
+            shape[1] = [materialItem, ITEM_STICK,  null];
+        }
+        // Flatten to ingredient list.
+        const ingredCount = {};
+        for (const row of shape) {
+            for (const c of row) {
+                if (c == null) continue;
+                ingredCount[c] = (ingredCount[c] || 0) + 1;
+            }
+        }
+        const ingredients = Object.entries(ingredCount).map(([id, count]) => ({
+            type: parseInt(id), count
+        }));
+        RECIPES.push({
+            result: toolItemId(toolType, mat),
+            count: 1,
+            ingredients,
+            shape,
+            note: TOOL_MAT_LABEL[mat] + ' ' + TOOL_TYPE_LABEL[toolType].toLowerCase()
+        });
+    }
+
+    function buildRecipes() {
+        // Planks: 1 wood log -> 4 planks
+        RECIPES.push({
+            result: BLOCKS.PLANKS, count: 4,
+            ingredients: [{ type: BLOCKS.WOOD, count: 1 }],
+            shape: [
+                [null, null, null],
+                [null, BLOCKS.WOOD, null],
+                [null, null, null]
+            ],
+            note: 'Доски (4) из 1 бревна'
+        });
+        // Sticks: 2 planks -> 4 sticks
+        RECIPES.push({
+            result: ITEM_STICK, count: 4,
+            ingredients: [{ type: BLOCKS.PLANKS, count: 2 }],
+            shape: [
+                [null, BLOCKS.PLANKS, null],
+                [null, BLOCKS.PLANKS, null],
+                [null, null, null]
+            ],
+            note: 'Палки (4) из 2 досок'
+        });
+        // Cobblestone-from-stone (just for completeness; user already has it).
+        // Tools — pickaxe/axe/shovel/sword/hoe across the 5 materials.
+        const matToBlock = {
+            wood:    BLOCKS.PLANKS,
+            stone:   BLOCKS.COBBLESTONE,
+            iron:    BLOCKS.IRON_ORE,
+            gold:    BLOCKS.GOLD_ORE,
+            diamond: BLOCKS.DIAMOND_ORE
+        };
+        for (const tt of TOOL_TYPES) {
+            for (const mm of TOOL_MATS) {
+                const mblock = matToBlock[mm];
+                if (mblock == null) continue;
+                addToolRecipe(tt, mm, mblock);
+            }
+        }
+    }
+    buildRecipes();
+
+    function inventoryCountOf(typeId) {
+        let total = 0;
+        for (let i = 0; i < HOTBAR_ITEMS.length; i++) {
+            const it = HOTBAR_ITEMS[i];
+            if (it.type === typeId) total += it.count;
+        }
+        return total;
+    }
+
+    function inventoryRemove(typeId, count) {
+        let need = count;
+        for (let i = 0; i < HOTBAR_ITEMS.length && need > 0; i++) {
+            const it = HOTBAR_ITEMS[i];
+            if (it.type !== typeId) continue;
+            const take = Math.min(it.count, need);
+            it.count -= take;
+            need -= take;
+            if (it.count <= 0) { it.type = null; it.count = 0; }
+        }
+        return need === 0;
+    }
+
+    function inventoryAdd(typeId, count) {
+        const def = isItemId(typeId) ? getItemDef(typeId) : null;
+        const stackMax = def ? (def.stack || 64) : 64;
+        const isTool = def && def.kind === 'tool';
+        // For tools, always create a fresh slot with full durability.
+        if (isTool) {
+            for (let i = 0; i < HOTBAR_ITEMS.length; i++) {
+                const slot = HOTBAR_ITEMS[i];
+                if (!slot.type) {
+                    slot.type = typeId;
+                    slot.count = 1;
+                    slot.durability = def.maxDurability;
+                    return true;
+                }
+            }
+            return false;
+        }
+        // Stack onto an existing slot if possible.
+        let need = count;
+        for (let i = 0; i < HOTBAR_ITEMS.length && need > 0; i++) {
+            const slot = HOTBAR_ITEMS[i];
+            if (slot.type === typeId && slot.count < stackMax) {
+                const room = stackMax - slot.count;
+                const take = Math.min(room, need);
+                slot.count += take;
+                need -= take;
+            }
+        }
+        for (let i = 0; i < HOTBAR_ITEMS.length && need > 0; i++) {
+            const slot = HOTBAR_ITEMS[i];
+            if (!slot.type) {
+                slot.type = typeId;
+                slot.count = Math.min(stackMax, need);
+                need -= slot.count;
+            }
+        }
+        return need === 0;
+    }
+
+    function canCraft(recipe) {
+        for (const ing of recipe.ingredients) {
+            if (inventoryCountOf(ing.type) < ing.count) return false;
+        }
+        return true;
+    }
+
+    function doCraft(recipe) {
+        if (!canCraft(recipe)) return false;
+        for (const ing of recipe.ingredients) {
+            inventoryRemove(ing.type, ing.count);
+        }
+        if (!inventoryAdd(recipe.result, recipe.count)) {
+            // Rollback if no inventory space (rare).
+            for (const ing of recipe.ingredients) inventoryAdd(ing.type, ing.count);
+            addChatMessage('§cНет места в инвентаре', 'error');
+            return false;
+        }
+        if (typeof audio !== 'undefined') audio.blockPlace();
+        setupHotbar();
+        return true;
+    }
+
+    function previewURLForType(typeId) {
+        if (typeId == null) return '';
+        if (isItemId(typeId)) return itemIconURL(typeId);
+        const data = BLOCK_DATA[typeId];
+        if (!data) return '';
+        // Use the atlas tile of this block's side face, rendered to a small
+        // canvas, so the recipe display matches the in-world look.
+        const tileIdx = blockTile(typeId, 'side');
+        const col = tileIdx % ATLAS_COLS;
+        const row = Math.floor(tileIdx / ATLAS_COLS);
+        const c = document.createElement('canvas');
+        c.width = c.height = 22;
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(atlasCanvas, col * ATLAS_TILE, row * ATLAS_TILE,
+                      ATLAS_TILE, ATLAS_TILE, 0, 0, 22, 22);
+        return c.toDataURL();
+    }
+
+    function renderCraftingPanel() {
+        const list = document.getElementById('crafting-list');
+        if (!list) return;
+        list.innerHTML = '';
+        for (const recipe of RECIPES) {
+            const row = document.createElement('div');
+            row.className = 'craft-row';
+
+            // 3x3 shape preview
+            const shape = document.createElement('div');
+            shape.className = 'recipe-shape';
+            for (let r = 0; r < 3; r++) {
+                for (let c = 0; c < 3; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'recipe-cell';
+                    const t = recipe.shape[r] && recipe.shape[r][c];
+                    if (t != null) {
+                        const url = previewURLForType(t);
+                        if (url) cell.style.backgroundImage = `url('${url}')`;
+                    }
+                    shape.appendChild(cell);
+                }
+            }
+            row.appendChild(shape);
+
+            const arrow = document.createElement('span');
+            arrow.className = 'arrow';
+            arrow.textContent = '➜';
+            row.appendChild(arrow);
+
+            const result = document.createElement('div');
+            result.className = 'result-cell';
+            const rurl = previewURLForType(recipe.result);
+            if (rurl) result.style.backgroundImage = `url('${rurl}')`;
+            const badge = document.createElement('span');
+            badge.style.position = 'absolute';
+            badge.style.bottom = '0';
+            badge.style.right = '2px';
+            badge.style.color = '#fff';
+            badge.style.textShadow = '1px 1px 0 #000';
+            badge.style.fontSize = '11px';
+            if (recipe.count > 1) badge.textContent = recipe.count;
+            result.appendChild(badge);
+            row.appendChild(result);
+
+            const name = document.createElement('div');
+            name.className = 'result-name';
+            const have = recipe.ingredients.map(i => {
+                const need = i.count;
+                const got = inventoryCountOf(i.type);
+                return `${got}/${need}`;
+            }).join('  ');
+            name.innerHTML = `<b>${recipe.note}</b><br><small style="font-size:10px;color:#222">${have}</small>`;
+            row.appendChild(name);
+
+            const btn = document.createElement('button');
+            btn.className = 'craft-btn';
+            btn.textContent = 'Craft';
+            btn.disabled = !canCraft(recipe);
+            btn.onclick = () => {
+                if (doCraft(recipe)) renderCraftingPanel();
+                else playButtonSound();
+            };
+            row.appendChild(btn);
+
+            list.appendChild(row);
+        }
+    }
+
+    function toggleCrafting(force) {
+        const panel = document.getElementById('crafting-panel');
+        if (!panel) return;
+        const open = (typeof force === 'boolean')
+            ? force
+            : panel.style.display !== 'flex';
+        panel.style.display = open ? 'flex' : 'none';
+        if (open) {
+            renderCraftingPanel();
+            document.exitPointerLock();
+            game.ui.crafting = true;
+        } else {
+            game.ui.crafting = false;
+            if (game.ui.inGame && !game.ui.paused && !game.ui.inventory) {
+                game.renderer.domElement.requestPointerLock();
+            }
+        }
     }
 
     function togglePause() {
@@ -5456,6 +6341,180 @@
         '§eВ замке давно никого не было…'
     ];
 
+    // Procedural mob "skin" face textures (front-facing, NearestFilter so
+    // every pixel stays crisp, Minecraft-style).
+    const _mobFaceCache = {};
+    function createMobFaceTexture(typeName) {
+        if (_mobFaceCache[typeName]) return _mobFaceCache[typeName];
+        const c = document.createElement('canvas');
+        c.width = c.height = 16;
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        drawMobFace(ctx, typeName);
+        const tex = new THREE.CanvasTexture(c);
+        tex.magFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.NearestFilter;
+        return (_mobFaceCache[typeName] = tex);
+    }
+
+    function drawMobFace(ctx, type) {
+        const t = MOB_TYPES[type];
+        const skinHex = '#' + ((t.head || 0x999999) >>> 0).toString(16).padStart(6, '0');
+        ctx.fillStyle = skinHex;
+        ctx.fillRect(0, 0, 16, 16);
+        if (type === 'zombie') {
+            // black eye sockets, small white pupils, sad mouth
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(3, 6, 3, 2);
+            ctx.fillRect(10, 6, 3, 2);
+            ctx.fillStyle = '#a3c853';
+            ctx.fillRect(4, 7, 1, 1);
+            ctx.fillRect(11, 7, 1, 1);
+            ctx.fillStyle = '#3a4d2a';
+            ctx.fillRect(5, 11, 6, 1);
+            ctx.fillRect(6, 12, 4, 1);
+        } else if (type === 'skeleton') {
+            // hollow eye sockets, white teeth
+            ctx.fillStyle = '#000';
+            ctx.fillRect(3, 5, 3, 4);
+            ctx.fillRect(10, 5, 3, 4);
+            ctx.fillStyle = '#dcdcdc';
+            ctx.fillRect(5, 11, 1, 2);
+            ctx.fillRect(7, 11, 1, 2);
+            ctx.fillRect(9, 11, 1, 2);
+            ctx.fillRect(11, 11, 1, 2);
+            ctx.fillStyle = '#444';
+            ctx.fillRect(4, 11, 9, 1);
+        } else if (type === 'creeper') {
+            // creeper face: sad mouth + diamond eye sockets
+            ctx.fillStyle = '#000';
+            ctx.fillRect(3, 5, 3, 3);
+            ctx.fillRect(10, 5, 3, 3);
+            ctx.fillRect(6, 10, 4, 2);
+            ctx.fillRect(5, 12, 2, 2);
+            ctx.fillRect(9, 12, 2, 2);
+        } else if (type === 'pig') {
+            // big snout + tiny eyes
+            ctx.fillStyle = '#d57b75';
+            ctx.fillRect(4, 9, 8, 5);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(6, 10, 2, 2);
+            ctx.fillRect(9, 10, 2, 2);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(3, 5, 2, 2);
+            ctx.fillRect(11, 5, 2, 2);
+        } else if (type === 'cow') {
+            // light muzzle + small dark eyes + horns spots
+            ctx.fillStyle = '#bda88f';
+            ctx.fillRect(4, 9, 8, 5);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(5, 11, 2, 1);
+            ctx.fillRect(10, 11, 2, 1);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(3, 5, 2, 2);
+            ctx.fillRect(11, 5, 2, 2);
+            // forehead white patch
+            ctx.fillStyle = '#e2dccc';
+            ctx.fillRect(6, 1, 4, 3);
+        } else if (type === 'villager') {
+            // small black eyes + unibrow + long-nose handled via nose box
+            ctx.fillStyle = '#000';
+            ctx.fillRect(4, 6, 2, 2);
+            ctx.fillRect(11, 6, 2, 2);
+            ctx.fillRect(4, 4, 9, 1);
+            ctx.fillStyle = '#5a3010';
+            ctx.fillRect(6, 12, 4, 1);
+        } else if (type === 'spider') {
+            // multiple red eyes
+            ctx.fillStyle = '#ff2020';
+            ctx.fillRect(3, 6, 2, 2);
+            ctx.fillRect(7, 6, 2, 2);
+            ctx.fillRect(11, 6, 2, 2);
+            ctx.fillRect(5, 9, 2, 2);
+            ctx.fillRect(9, 9, 2, 2);
+        }
+    }
+
+    function makeFacedHeadMaterials(typeName, frontIdx) {
+        const t = MOB_TYPES[typeName];
+        const tex = createMobFaceTexture(typeName);
+        const skinHex = t.head;
+        const skinSide = new THREE.MeshLambertMaterial({ color: skinHex });
+        const front = new THREE.MeshLambertMaterial({ map: tex });
+        // Box face order: [+x, -x, +y, -y, +z, -z]
+        const arr = [];
+        for (let i = 0; i < 6; i++) {
+            arr.push(i === frontIdx ? front : skinSide.clone());
+        }
+        return arr;
+    }
+
+    // Procedural body decoration drawn as a 16x16 canvas (used as map for the
+    // BoxGeometry's whole material — same texture on every face).
+    function createBodyTexture(typeName) {
+        const c = document.createElement('canvas');
+        c.width = c.height = 16;
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        const t = MOB_TYPES[typeName];
+        const baseHex = '#' + ((t.shirt || 0x999999) >>> 0).toString(16).padStart(6, '0');
+        ctx.fillStyle = baseHex;
+        ctx.fillRect(0, 0, 16, 16);
+        if (typeName === 'creeper') {
+            // randomised splotch pattern in dark green
+            ctx.fillStyle = '#3e9a36';
+            for (let y = 0; y < 16; y += 2) {
+                for (let x = 0; x < 16; x += 2) {
+                    if (((x * 7 + y * 13 + 5) % 5) < 2) ctx.fillRect(x, y, 2, 2);
+                }
+            }
+            ctx.fillStyle = '#5fcd55';
+            for (let y = 1; y < 16; y += 4) {
+                for (let x = 1; x < 16; x += 4) ctx.fillRect(x, y, 1, 1);
+            }
+        } else if (typeName === 'zombie') {
+            // tattered shirt patches
+            ctx.fillStyle = '#264a5f';
+            for (let i = 0; i < 8; i++) {
+                const x = (i * 5 + 1) % 16, y = (i * 7 + 3) % 14;
+                ctx.fillRect(x, y, 2, 1);
+            }
+            ctx.fillStyle = '#1c3848';
+            ctx.fillRect(0, 14, 16, 2);
+        } else if (typeName === 'skeleton') {
+            // rib lines
+            ctx.fillStyle = '#bdbdbd';
+            for (let y = 3; y < 13; y += 3) ctx.fillRect(2, y, 12, 1);
+        } else if (typeName === 'cow') {
+            // black & white patchy skin
+            ctx.fillStyle = '#1c1c1c';
+            ctx.fillRect(2, 3, 4, 4);
+            ctx.fillRect(9, 8, 5, 5);
+            ctx.fillStyle = '#dcd6c2';
+            ctx.fillRect(8, 2, 5, 4);
+            ctx.fillRect(2, 9, 4, 4);
+        } else if (typeName === 'pig') {
+            // light belly stripe
+            ctx.fillStyle = '#f6c0b8';
+            ctx.fillRect(0, 12, 16, 4);
+        } else if (typeName === 'villager') {
+            // robe with a belt
+            ctx.fillStyle = '#5a2710';
+            ctx.fillRect(0, 11, 16, 2);
+            ctx.fillStyle = '#7a3818';
+            for (let x = 0; x < 16; x += 4) ctx.fillRect(x, 14, 2, 2);
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.magFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.NearestFilter;
+        return tex;
+    }
+    const _mobBodyCache = {};
+    function getBodyTex(typeName) {
+        return _mobBodyCache[typeName] ||
+               (_mobBodyCache[typeName] = createBodyTexture(typeName));
+    }
+
     function makeMobMesh(typeName) {
         const t = MOB_TYPES[typeName];
         const group = new THREE.Group();
@@ -5470,81 +6529,124 @@
             if (name) group.userData.parts[name] = m;
             return m;
         }
+        function texturedPart(w, h, d, tex, x, y, z, name) {
+            const mat = new THREE.MeshLambertMaterial({ map: tex });
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const m = new THREE.Mesh(geo, mat);
+            m.position.set(x, y, z);
+            group.add(m);
+            if (name) group.userData.parts[name] = m;
+            return m;
+        }
+        function headPart(w, h, d, frontIdx, x, y, z) {
+            const mats = makeFacedHeadMaterials(typeName, frontIdx);
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const m = new THREE.Mesh(geo, mats);
+            m.position.set(x, y, z);
+            group.add(m);
+            group.userData.parts.head = m;
+            return m;
+        }
 
         if (typeName === 'spider') {
             // Spider: low body + head + 8 legs.
-            part(0.9, 0.4, 0.6, t.color, 0, 0.35, 0, 'body');
-            part(0.5, 0.4, 0.5, t.head,  0.55, 0.35, 0, 'head');
-            // Eyes
-            const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff2020 });
-            const eyeGeo = new THREE.BoxGeometry(0.08, 0.08, 0.08);
-            const eL = new THREE.Mesh(eyeGeo, eyeMat); eL.position.set(0.85, 0.45, 0.12); group.add(eL);
-            const eR = new THREE.Mesh(eyeGeo, eyeMat); eR.position.set(0.85, 0.45, -0.12); group.add(eR);
-            // Legs (4 each side)
+            texturedPart(0.95, 0.45, 0.7, getBodyTex('spider'), 0, 0.4, 0, 'body');
+            // Head faces +x in world (head front index = 0).
+            headPart(0.55, 0.45, 0.55, 0, 0.55, 0.42, 0);
+            // Legs (4 each side): kink at the knee.
+            const legColor = t.color;
             for (let i = 0; i < 4; i++) {
                 const off = (i - 1.5) * 0.22;
-                part(0.08, 0.4, 0.08, t.color, off, 0.2,  0.45, 'legL' + i);
-                part(0.08, 0.4, 0.08, t.color, off, 0.2, -0.45, 'legR' + i);
+                const l1 = part(0.07, 0.16, 0.07, legColor, off,  0.42,  0.45, 'legL' + i + 'a');
+                const l2 = part(0.07, 0.32, 0.07, legColor, off,  0.20,  0.55, 'legL' + i);
+                const r1 = part(0.07, 0.16, 0.07, legColor, off,  0.42, -0.45, 'legR' + i + 'a');
+                const r2 = part(0.07, 0.32, 0.07, legColor, off,  0.20, -0.55, 'legR' + i);
             }
             return group;
         }
 
-        // Humanoid layout: head, body, two arms, two legs.
-        part(0.5, 0.5, 0.5, t.head,  0, 1.4, 0, 'head');
-        part(0.5, 0.7, 0.3, t.shirt, 0, 0.95, 0, 'body');
-        part(0.25, 0.7, 0.25, t.shirt, 0.35,  0.95, 0, 'armR');
-        part(0.25, 0.7, 0.25, t.shirt, -0.35, 0.95, 0, 'armL');
-        part(0.25, 0.7, 0.25, t.pants, 0.13,  0.35, 0, 'legR');
-        part(0.25, 0.7, 0.25, t.pants, -0.13, 0.35, 0, 'legL');
+        // Humanoid: head front faces +z (index 4 in the BoxGeometry material array).
+        const HEAD_FRONT_IDX = 4;
+        const isQuadruped = typeName === 'cow' || typeName === 'pig';
+        const bodyTex = getBodyTex(typeName);
 
-        // Tiny details: villager nose, creeper face, skeleton bowl-helm, etc.
-        if (typeName === 'villager') {
-            const noseMat = new THREE.MeshLambertMaterial({ color: 0xa07050 });
-            const nose = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.18), noseMat);
-            nose.position.set(0, 1.4, 0.32); group.add(nose);
-        } else if (typeName === 'creeper') {
-            const faceMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-            const eyeGeo = new THREE.BoxGeometry(0.08, 0.08, 0.04);
-            const eL = new THREE.Mesh(eyeGeo, faceMat); eL.position.set(-0.1, 1.45, 0.26); group.add(eL);
-            const eR = new THREE.Mesh(eyeGeo, faceMat); eR.position.set( 0.1, 1.45, 0.26); group.add(eR);
-            const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.10, 0.04), faceMat);
-            mouth.position.set(0, 1.30, 0.26); group.add(mouth);
-        } else if (typeName === 'zombie') {
-            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-            const eyeGeo = new THREE.BoxGeometry(0.08, 0.08, 0.04);
-            const eL = new THREE.Mesh(eyeGeo, eyeMat); eL.position.set(-0.1, 1.45, 0.26); group.add(eL);
-            const eR = new THREE.Mesh(eyeGeo, eyeMat); eR.position.set( 0.1, 1.45, 0.26); group.add(eR);
-        } else if (typeName === 'skeleton') {
-            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-            const eyeGeo = new THREE.BoxGeometry(0.08, 0.10, 0.04);
-            const eL = new THREE.Mesh(eyeGeo, eyeMat); eL.position.set(-0.1, 1.45, 0.26); group.add(eL);
-            const eR = new THREE.Mesh(eyeGeo, eyeMat); eR.position.set( 0.1, 1.45, 0.26); group.add(eR);
-            // bow
-            const bowMat = new THREE.MeshLambertMaterial({ color: 0x6b4423 });
-            const bow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.6, 0.08), bowMat);
-            bow.position.set(0.4, 0.95, 0.25); group.add(bow);
-        } else if (typeName === 'cow' || typeName === 'pig') {
-            // Make them quadruped: rotate body and reposition limbs.
-            const body = group.userData.parts.body;
-            body.rotation.x = Math.PI / 2;
-            body.scale.set(1.1, 1.5, 1.0);
-            body.position.set(0, 0.6, 0);
-            const head = group.userData.parts.head;
-            head.position.set(0, 0.7, 0.5);
-            // turn arms into front legs, legs into back legs
-            const aR = group.userData.parts.armR; aR.position.set(0.18, 0.35, 0.25); aR.scale.y = 0.7;
-            const aL = group.userData.parts.armL; aL.position.set(-0.18, 0.35, 0.25); aL.scale.y = 0.7;
-            const lR = group.userData.parts.legR; lR.position.set(0.18, 0.35, -0.25); lR.scale.y = 0.7;
-            const lL = group.userData.parts.legL; lL.position.set(-0.18, 0.35, -0.25); lL.scale.y = 0.7;
+        if (isQuadruped) {
+            // Big horizontal body, head jutting forward.
+            texturedPart(0.55, 0.55, 1.05, bodyTex, 0, 0.7, 0, 'body');
+            headPart(0.5, 0.5, 0.5, HEAD_FRONT_IDX, 0, 0.75, 0.65);
+            // Four legs.
+            const lp = t.pants;
+            const lH = 0.5;
+            part(0.18, lH, 0.18, lp,  0.18, lH/2,  0.30, 'legR');
+            part(0.18, lH, 0.18, lp, -0.18, lH/2,  0.30, 'legL');
+            part(0.18, lH, 0.18, lp,  0.18, lH/2, -0.30, 'legBR');
+            part(0.18, lH, 0.18, lp, -0.18, lH/2, -0.30, 'legBL');
+            // Use armR/armL aliases so existing animation code still walks.
+            group.userData.parts.armR = group.userData.parts.legBR;
+            group.userData.parts.armL = group.userData.parts.legBL;
             if (typeName === 'cow') {
-                const horn = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.06), new THREE.MeshLambertMaterial({ color: 0xefe5cc }));
-                horn.position.set(0.12, 0.92, 0.5); group.add(horn);
-                const horn2 = horn.clone(); horn2.position.set(-0.12, 0.92, 0.5); group.add(horn2);
-                // black-and-white spots: add a couple of small dark patches
-                const spotMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-                const s1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.18), spotMat);
-                s1.position.set(0, 0.85, 0); group.add(s1);
+                // Horns
+                const hornMat = new THREE.MeshLambertMaterial({ color: 0xefe5cc });
+                const hornGeo = new THREE.BoxGeometry(0.07, 0.16, 0.07);
+                const hL = new THREE.Mesh(hornGeo, hornMat);
+                hL.position.set(-0.15, 1.0, 0.62); group.add(hL);
+                const hR = new THREE.Mesh(hornGeo, hornMat);
+                hR.position.set( 0.15, 1.0, 0.62); group.add(hR);
+                // Udder
+                const udder = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.1, 0.18),
+                    new THREE.MeshLambertMaterial({ color: 0xd99a8e }));
+                udder.position.set(0, 0.4, -0.05); group.add(udder);
+                // Tail
+                const tail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.30, 0.06),
+                    new THREE.MeshLambertMaterial({ color: 0x6e5538 }));
+                tail.position.set(0, 0.85, -0.55); tail.rotation.x = -0.3; group.add(tail);
+            } else if (typeName === 'pig') {
+                // Snout extension already lives in the face texture.
+                // Curly tail.
+                const tail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.18),
+                    new THREE.MeshLambertMaterial({ color: 0xe49a92 }));
+                tail.position.set(0, 0.95, -0.55); group.add(tail);
             }
+            return group;
+        }
+
+        // Humanoid layout: bigger head, slimmer arms, longer legs.
+        headPart(0.55, 0.55, 0.55, HEAD_FRONT_IDX, 0, 1.5, 0);
+        texturedPart(0.55, 0.75, 0.30, bodyTex, 0, 0.95, 0, 'body');
+        part(0.22, 0.75, 0.22, t.shirt,  0.39,  0.95, 0, 'armR');
+        part(0.22, 0.75, 0.22, t.shirt, -0.39,  0.95, 0, 'armL');
+        part(0.22, 0.75, 0.22, t.pants,  0.13,  0.20, 0, 'legR');
+        part(0.22, 0.75, 0.22, t.pants, -0.13,  0.20, 0, 'legL');
+
+        // Mob-specific accessories:
+        if (typeName === 'villager') {
+            // Long nose extending from face.
+            const noseMat = new THREE.MeshLambertMaterial({ color: 0xa07050 });
+            const nose = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.18, 0.22), noseMat);
+            nose.position.set(0, 1.45, 0.36); group.add(nose);
+            // Cross-strap apron
+            const apronMat = new THREE.MeshLambertMaterial({ color: 0x4d2510 });
+            const apron = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.45, 0.10), apronMat);
+            apron.position.set(0, 1.0, 0.18); group.add(apron);
+        } else if (typeName === 'skeleton') {
+            // Bow held in right arm, pointed forward.
+            const bowMat = new THREE.MeshLambertMaterial({ color: 0x6b4423 });
+            const bow = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.65, 0.06), bowMat);
+            bow.position.set(0.55, 1.0, 0.25); group.add(bow);
+            // String
+            const stringMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
+            const string = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.65, 0.02), stringMat);
+            string.position.set(0.55, 1.0, 0.30); group.add(string);
+        } else if (typeName === 'creeper') {
+            // Creeper has 4 short legs instead of two; simulate by hiding arms
+            // and shifting legs.
+            group.userData.parts.armR.visible = false;
+            group.userData.parts.armL.visible = false;
+            group.userData.parts.legR.position.set( 0.13, 0.20,  0.13);
+            group.userData.parts.legL.position.set(-0.13, 0.20,  0.13);
+            // Add the rear pair.
+            const lr = part(0.22, 0.45, 0.22, t.pants,  0.13, 0.20, -0.13, 'legBR');
+            const ll = part(0.22, 0.45, 0.22, t.pants, -0.13, 0.20, -0.13, 'legBL');
         }
 
         return group;
@@ -5964,7 +7066,14 @@
                 }
                 if (performance.now() - game.player.lastAttackAt < 250) return;
                 game.player.lastAttackAt = performance.now();
-                damageMob(best, 5);
+                // Use the held tool's damage stat if it's a weapon-class tool;
+                // otherwise fall back to a 1-damage punch.
+                const ht = heldTool();
+                const dmg = ht ? (ht.def.damage || 2) : 1;
+                damageMob(best, dmg);
+                if (ht && game.gameMode === 0) damageHeldTool(ht.def.toolType === 'sword' ? 1 : 2);
+                game.input.swinging = true;
+                game.input.swingStart = performance.now();
                 return;
             }
             return origBreakBlock();
@@ -6479,6 +7588,10 @@
 
         document.getElementById('touch-place').addEventListener('click', () => placeBlock());
         document.getElementById('touch-inv').addEventListener('click', () => toggleInventory());
+        const tcraft = document.getElementById('touch-craft');
+        if (tcraft) tcraft.addEventListener('click', () => toggleCrafting());
+        const ccloseBtn = document.getElementById('crafting-close');
+        if (ccloseBtn) ccloseBtn.addEventListener('click', () => toggleCrafting(false));
         document.getElementById('touch-chat').addEventListener('click', () => openChat());
         document.getElementById('touch-redstone').addEventListener('click', () => {
             if (toggleRedstoneSource()) addChatMessage('§6Redstone-источник переключён', 'normal');
