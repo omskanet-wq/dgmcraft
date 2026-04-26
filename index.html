@@ -2379,16 +2379,18 @@
         if (game.input.mouseDown) {
             // Compute mining speed multiplier from held tool vs block.
             const blockId = t.type;
+            const pref = BLOCK_PREFERRED_TOOL[blockId];
             const req = BLOCK_MINING_REQUIREMENT[blockId];
             const ht = heldTool();
             let mult = 2; // bare-hand baseline
             if (ht) {
-                const correctTool = req && ht.def.toolType === req.tool;
+                const matchPref = pref && ht.def.toolType === pref.tool;
                 const tierOK = !req || ht.def.tier >= req.tier;
-                if (correctTool && tierOK) mult = ht.def.speed;
+                if (matchPref && tierOK) mult = ht.def.speed;
                 else if (ht.def.toolType === 'sword') mult = 1.5; // sword is slow
+                else mult = 1; // wrong tool, slower than hand
             } else if (req) {
-                mult = 0.6; // hand-breaking ore is even slower (no drop anyway)
+                mult = 0.6; // hand-breaking required-tool block is slow + no drop
             }
             game.breaking.progress += dt * mult;
 
@@ -2649,17 +2651,17 @@
             } else if (mode === 1) {
                 game.gameMode = 1;
                 addChatMessage('Set gamemode to Creative', 'success');
-                // Fill hotbar with blocks in creative (64 each), plus a
-                // diamond pickaxe and sword for testing tool features.
+                // Creative starter: a few core blocks + diamond tools, leaving
+                // 3 slots free so crafted tools / extra blocks fit.
+                HOTBAR_ITEMS.forEach(it => { it.type = null; it.count = 0; it.durability = null; });
                 HOTBAR_ITEMS[0] = {type: BLOCKS.GRASS, count: 64};
                 HOTBAR_ITEMS[1] = {type: BLOCKS.STONE, count: 64};
                 HOTBAR_ITEMS[2] = {type: BLOCKS.WOOD, count: 64};
                 HOTBAR_ITEMS[3] = {type: BLOCKS.PLANKS, count: 64};
-                HOTBAR_ITEMS[4] = {type: BLOCKS.GLASS, count: 64};
-                HOTBAR_ITEMS[5] = {type: BLOCKS.SAND, count: 64};
-                HOTBAR_ITEMS[6] = {type: ITEM_STICK, count: 64};
-                HOTBAR_ITEMS[7] = {type: toolItemId('pickaxe', 'diamond'), count: 1, durability: TOOL_MAX_DURABILITY.diamond};
-                HOTBAR_ITEMS[8] = {type: toolItemId('sword', 'diamond'),   count: 1, durability: TOOL_MAX_DURABILITY.diamond};
+                HOTBAR_ITEMS[4] = {type: ITEM_STICK, count: 64};
+                HOTBAR_ITEMS[5] = {type: toolItemId('pickaxe', 'diamond'), count: 1, durability: TOOL_MAX_DURABILITY.diamond};
+                HOTBAR_ITEMS[6] = {type: toolItemId('sword', 'diamond'),   count: 1, durability: TOOL_MAX_DURABILITY.diamond};
+                // Slots 7, 8 left empty for crafted items.
                 setupHotbar();
                 setupInventory();
                 updateHUDVisibility();
@@ -3331,13 +3333,25 @@
         return ITEMS[id] || null;
     }
 
-    // Which block kinds need which tool to drop themselves; otherwise no drop.
-    // Maps block -> { tool: 'pickaxe'|'axe'|'shovel'|null, tier: 1..4 }.
+    // Two separate maps:
+    //   BLOCK_MINING_REQUIREMENT — drops ONLY if held tool meets this requirement
+    //     (Minecraft: stone variants and ores need a pickaxe of high enough tier).
+    //   BLOCK_PREFERRED_TOOL — using this tool just speeds mining up; drops always
+    //     happen with bare hand for soft blocks (dirt, sand, wood, etc).
     const BLOCK_MINING_REQUIREMENT = {};
+    const BLOCK_PREFERRED_TOOL = {};
     function setMiningReq(blockId, tool, tier) {
         if (blockId == null) return;
         BLOCK_MINING_REQUIREMENT[blockId] = { tool, tier: tier || 1 };
+        // Required-tool implies it's also the preferred tool for speed.
+        BLOCK_PREFERRED_TOOL[blockId] = { tool, tier: tier || 1 };
     }
+    function setPreferredTool(blockId, tool) {
+        if (blockId == null) return;
+        BLOCK_PREFERRED_TOOL[blockId] = { tool, tier: 1 };
+    }
+
+    // Hard blocks: drops require the right tool/tier.
     setMiningReq(BLOCKS.STONE,        'pickaxe', 1);
     setMiningReq(BLOCKS.COBBLESTONE,  'pickaxe', 1);
     setMiningReq(BLOCKS.COAL_ORE,     'pickaxe', 1);
@@ -3347,20 +3361,20 @@
     setMiningReq(BLOCKS.BRICK,        'pickaxe', 1);
     setMiningReq(BLOCKS.SANDSTONE,    'pickaxe', 1);
     setMiningReq(BLOCKS.GLOWSTONE,    'pickaxe', 1);
-    setMiningReq(BLOCKS.CLAY,         'shovel',  1);
     setMiningReq(BLOCKS.GLASS,        'pickaxe', 1);
     setMiningReq(BLOCKS.ICE,          'pickaxe', 1);
     setMiningReq(BLOCKS.REDSTONE_LAMP_OFF, 'pickaxe', 1);
     setMiningReq(BLOCKS.REDSTONE_LAMP_ON,  'pickaxe', 1);
 
-    setMiningReq(BLOCKS.WOOD,    'axe', 1);
-    setMiningReq(BLOCKS.PLANKS,  'axe', 1);
-
-    setMiningReq(BLOCKS.DIRT,    'shovel', 1);
-    setMiningReq(BLOCKS.GRASS,   'shovel', 1);
-    setMiningReq(BLOCKS.SAND,    'shovel', 1);
-    setMiningReq(BLOCKS.GRAVEL,  'shovel', 1);
-    setMiningReq(BLOCKS.SNOW,    'shovel', 1);
+    // Soft blocks: drop with bare hand; tool only changes speed (Minecraft-style).
+    setPreferredTool(BLOCKS.WOOD,    'axe');
+    setPreferredTool(BLOCKS.PLANKS,  'axe');
+    setPreferredTool(BLOCKS.DIRT,    'shovel');
+    setPreferredTool(BLOCKS.GRASS,   'shovel');
+    setPreferredTool(BLOCKS.SAND,    'shovel');
+    setPreferredTool(BLOCKS.GRAVEL,  'shovel');
+    setPreferredTool(BLOCKS.SNOW,    'shovel');
+    setPreferredTool(BLOCKS.CLAY,    'shovel');
 
     function blockTile(blockId, face) {
         const m = BLOCK_FACE_TILE[blockId];
@@ -5325,6 +5339,9 @@
                 // Start swing animation
                 game.input.swinging = true;
                 game.input.swingStart = performance.now();
+                // Immediate mob attack on click — works even when no block is
+                // under the crosshair (e.g. mob silhouetted against the sky).
+                if (typeof tryAttackMob === 'function') tryAttackMob();
             }
             if (e.button === 2) placeBlock();
         });
@@ -7264,42 +7281,53 @@
         spawnMob(pick, x + 0.5, y, z + 0.5);
     }
 
-    // ---------- Player attack: extend the existing breakBlock with a mob hit test ----------
+    // Returns the closest hostile mob the player is looking at within `range`,
+    // or null. Skips dying mobs and NPC villagers (those are friendly).
+    function pickAttackedMob(range) {
+        if (!game.mobs || !game.mobs.list || !game.mobs.list.length) return null;
+        const camDir = new THREE.Vector3();
+        game.camera.getWorldDirection(camDir);
+        const ray = new THREE.Ray(game.camera.position.clone(), camDir);
+        let best = null, bestT = range;
+        for (const mob of game.mobs.list) {
+            if (mob.dying) continue;
+            if (mob.def && mob.def.npc) continue;
+            const center = mob.pos.clone(); center.y += 1;
+            const closest = new THREE.Vector3();
+            ray.closestPointToPoint(center, closest);
+            const tDist = closest.distanceTo(game.camera.position);
+            if (tDist < 0 || tDist > bestT) continue;
+            const radial = closest.distanceTo(center);
+            if (radial < 0.9 && tDist < bestT) { best = mob; bestT = tDist; }
+        }
+        return best;
+    }
+
+    // Try to attack a mob the player is aiming at. Returns true if a mob was
+    // hit (meaning the action consumed the click; don't break a block).
+    function tryAttackMob() {
+        if (performance.now() - (game.player.lastAttackAt || 0) < 250) return false;
+        const target = pickAttackedMob(5.5);
+        if (!target) return false;
+        game.player.lastAttackAt = performance.now();
+        const ht = heldTool();
+        // Punch = 1, sword/axe damage from item def, other tools = 1.
+        let dmg = 1;
+        if (ht && ht.def.damage) dmg = ht.def.damage;
+        damageMob(target, dmg);
+        if (ht && game.gameMode === 0) {
+            damageHeldTool(ht.def.toolType === 'sword' ? 1 : 2);
+        }
+        game.input.swinging = true;
+        game.input.swingStart = performance.now();
+        return true;
+    }
+
+    // ---------- Player attack: also run mob hit test on every breakBlock call ----------
     if (typeof breakBlock === 'function') {
         const origBreakBlock = breakBlock;
-        // Replace the global binding so all callers (mouse, touch) hit mobs first.
         breakBlock = function () {
-            // Mob raycast first
-            const camDir = new THREE.Vector3();
-            game.camera.getWorldDirection(camDir);
-            const ray = new THREE.Ray(game.camera.position.clone(), camDir);
-            let best = null, bestT = 5.5;
-            for (const mob of game.mobs.list) {
-                const center = mob.pos.clone(); center.y += 1;
-                const closest = new THREE.Vector3();
-                ray.closestPointToPoint(center, closest);
-                const tDist = closest.distanceTo(game.camera.position);
-                if (tDist < 0 || tDist > bestT) continue;
-                const radial = closest.distanceTo(center);
-                if (radial < 0.7 && tDist < bestT) { best = mob; bestT = tDist; }
-            }
-            if (best) {
-                if (best.def.npc) {
-                    // right-clicking handled separately; left-click on villager: ignore
-                    return origBreakBlock();
-                }
-                if (performance.now() - game.player.lastAttackAt < 250) return;
-                game.player.lastAttackAt = performance.now();
-                // Use the held tool's damage stat if it's a weapon-class tool;
-                // otherwise fall back to a 1-damage punch.
-                const ht = heldTool();
-                const dmg = ht ? (ht.def.damage || 2) : 1;
-                damageMob(best, dmg);
-                if (ht && game.gameMode === 0) damageHeldTool(ht.def.toolType === 'sword' ? 1 : 2);
-                game.input.swinging = true;
-                game.input.swingStart = performance.now();
-                return;
-            }
+            if (tryAttackMob()) return;
             return origBreakBlock();
         };
     }
@@ -7893,6 +7921,7 @@
                 game.input.mouseDown = true;
                 game.input.swinging = true;
                 game.input.swingStart = performance.now();
+                if (typeof tryAttackMob === 'function') tryAttackMob();
             },
             () => { game.input.mouseDown = false; });
 
