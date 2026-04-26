@@ -2442,27 +2442,59 @@
         game.heldBlock.rotation.copy(game.camera.rotation);
         game.heldBlock.rotation.z -= 0.2;
 
-        // Swing animation when breaking or attacking - DOWNWARD (moderate)
+        // Swing animation when breaking or attacking — sword/sword-like tools
+        // get a wide arc, picks/axes get a heavy overhead chop, blocks get a
+        // subtle nudge.
         if (game.input.swinging) {
-            const swingProgress = (performance.now() - game.input.swingStart) / 300; // 300ms swing
+            const elapsed = performance.now() - game.input.swingStart;
+            const swingProgress = elapsed / 300;
             if (swingProgress < 1) {
-                const swing = Math.sin(swingProgress * Math.PI);
-                // Tools get a wider arc than a bare hand or block.
+                // Parabolic ease-out: rises fast, holds peak briefly, falls back.
+                const t = swingProgress;
+                const swing = Math.sin(t * Math.PI);
+                const overshoot = Math.sin(t * Math.PI * 1.4) * 0.25;
                 const isTool = isItemId(blockType);
-                const arc = isTool ? 1.0 : 0.6;
-                game.heldBlock.rotation.x -= swing * arc;
-                game.heldBlock.rotation.z -= swing * (isTool ? 0.4 : 0);
-                game.heldBlock.position.y -= swing * 0.15;
-                game.heldBlock.position.z -= swing * 0.15;
+                const def = isTool ? getItemDef(blockType) : null;
+                let arc = 0.6;
+                let twist = 0;
+                let yPunch = 0.15;
+                let zPunch = 0.15;
+                if (def && def.toolType === 'sword') {
+                    arc = 1.4; twist = 0.7; yPunch = 0.1; zPunch = 0.05;
+                } else if (def && (def.toolType === 'axe' || def.toolType === 'pickaxe')) {
+                    arc = 1.1; twist = 0.3; yPunch = 0.22; zPunch = 0.18;
+                } else if (def) {
+                    arc = 0.9; twist = 0.4; yPunch = 0.15; zPunch = 0.12;
+                }
+                game.heldBlock.rotation.x -= swing * arc + overshoot * 0.15;
+                game.heldBlock.rotation.z -= swing * twist;
+                game.heldBlock.rotation.y -= swing * twist * 0.4;
+                game.heldBlock.position.y -= swing * yPunch;
+                game.heldBlock.position.z -= swing * zPunch;
             } else {
                 game.input.swinging = false;
             }
         }
 
-        // Walking animation
+        // Eating animation: held item rises towards the camera (mouth) and
+        // wiggles slightly while the eat timer ticks.
+        if (game.player.eating) {
+            const e = game.player.eating;
+            const t = (performance.now() - e.startT) / e.duration;
+            const k = Math.min(1, t);
+            const wiggle = Math.sin((performance.now() - e.startT) * 0.025) * 0.08;
+            game.heldBlock.position.y += k * 0.18 + wiggle * 0.5;
+            game.heldBlock.position.z += k * 0.20;
+            game.heldBlock.rotation.x -= k * 0.6 + wiggle;
+            game.heldBlock.rotation.z += wiggle * 0.6;
+        }
+
+        // Walking animation — bigger when sprinting.
         if (game.player.walkBob && Math.abs(game.player.walkBob) > 0.001) {
-            game.heldBlock.position.y += game.player.walkBob * 2;
-            game.heldBlock.rotation.x += game.player.walkBob * 0.3;
+            const sprintMul = game.player.sprinting ? 1.6 : 1.0;
+            game.heldBlock.position.y += game.player.walkBob * 2 * sprintMul;
+            game.heldBlock.rotation.x += game.player.walkBob * 0.3 * sprintMul;
+            game.heldBlock.position.x += game.player.walkBob * 0.4 * sprintMul;
         }
     }
 
@@ -2499,6 +2531,11 @@
                 else mult = 1; // wrong tool, slower than hand
             } else if (req) {
                 mult = 0.6; // hand-breaking required-tool block is slow + no drop
+            }
+            // Pay-to-win mining-boost perk (1.5x while active).
+            if (typeof loadPerks === 'function') {
+                const p = loadPerks();
+                if (p.miningBoostUntil && p.miningBoostUntil > Date.now()) mult *= 1.5;
             }
             game.breaking.progress += dt * mult;
 
@@ -2607,6 +2644,14 @@
             // overflow falls through into the 27-slot main inventory.
             const dist = item.position.distanceTo(game.player.pos);
             if (dist < 1.5) {
+                // Coins go straight to the wallet, never to inventory.
+                if (typeof tryConsumeCoinPickup === 'function'
+                    && tryConsumeCoinPickup(data.blockType, 1)) {
+                    if (typeof audio !== 'undefined' && audio.uiClick) audio.uiClick();
+                    game.scene.remove(item);
+                    game.droppedItems.splice(i, 1);
+                    continue;
+                }
                 const before = inventoryCountOf(data.blockType);
                 if (inventoryAdd(data.blockType, 1)) {
                     if (typeof audio !== 'undefined' && audio.uiClick) audio.uiClick();
@@ -3731,7 +3776,14 @@
         // Food (fresh row).
         WHEAT:        80, BREAD:        81, APPLE:        82, GOLDEN_APPLE: 83,
         RAW_BEEF:     84, COOKED_BEEF:  85, RAW_PORK:     86, COOKED_PORK:  87,
-        COOKIE:       88, MUSHROOM_STEW:89, COAL_ITEM:    90
+        COOKIE:       88, MUSHROOM_STEW:89, COAL_ITEM:    90,
+
+        // Misc items / weapons (next row).
+        BOW:           91, ARROW_ITEM:   92, SHIELD:       93, IRON_INGOT:   94,
+        GOLD_INGOT:    95, EMERALD:      96, DIAMOND_GEM:  97, REDSTONE_DUST:98,
+        BONE:          99, STRING:      100, GUNPOWDER:   101, FLINT:       102,
+        DGM_COIN:     103, LOOTBOX_COMMON:104,LOOTBOX_RARE:105,LOOTBOX_EPIC:106,
+        DAGGER:       107
     };
 
     // Per-block, per-face tile lookup. {top, side, bottom} optional; defaults
@@ -3867,6 +3919,45 @@
     defineFood(ITEM_COOKIE,        'Печенье',        TILE.COOKIE,       2, 0.4);
     defineFood(ITEM_MUSHROOM_STEW, 'Грибной суп',    TILE.MUSHROOM_STEW, 6, 7.2, { stack: 1 });
     ITEMS[ITEM_COAL] = { kind: 'misc', name: 'Уголь', tile: TILE.COAL_ITEM, stack: 64 };
+
+    // Misc items / weapons. Most are crafting materials or props for the
+    // shop / lootbox systems; only the bow and dagger have unique tool
+    // behaviour right now.
+    const ITEM_BOW           = ITEM_ID_BASE + 220;
+    const ITEM_ARROW         = ITEM_ID_BASE + 221;
+    const ITEM_SHIELD        = ITEM_ID_BASE + 222;
+    const ITEM_IRON_INGOT    = ITEM_ID_BASE + 223;
+    const ITEM_GOLD_INGOT    = ITEM_ID_BASE + 224;
+    const ITEM_EMERALD       = ITEM_ID_BASE + 225;
+    const ITEM_DIAMOND_GEM   = ITEM_ID_BASE + 226;
+    const ITEM_REDSTONE_DUST = ITEM_ID_BASE + 227;
+    const ITEM_BONE          = ITEM_ID_BASE + 228;
+    const ITEM_STRING        = ITEM_ID_BASE + 229;
+    const ITEM_GUNPOWDER     = ITEM_ID_BASE + 230;
+    const ITEM_FLINT         = ITEM_ID_BASE + 231;
+    const ITEM_DGM_COIN      = ITEM_ID_BASE + 232;
+    const ITEM_LOOTBOX_COMMON= ITEM_ID_BASE + 233;
+    const ITEM_LOOTBOX_RARE  = ITEM_ID_BASE + 234;
+    const ITEM_LOOTBOX_EPIC  = ITEM_ID_BASE + 235;
+    const ITEM_DAGGER        = ITEM_ID_BASE + 236;
+
+    ITEMS[ITEM_BOW]           = { kind: 'tool', toolType: 'bow', name: 'Лук',          tile: TILE.BOW,          stack: 1, maxDurability: 384, speed: 1.0, tier: 1, damage: 4 };
+    ITEMS[ITEM_ARROW]         = { kind: 'misc', name: 'Стрела',                          tile: TILE.ARROW_ITEM,   stack: 64 };
+    ITEMS[ITEM_SHIELD]        = { kind: 'tool', toolType: 'shield', name: 'Щит',          tile: TILE.SHIELD,       stack: 1, maxDurability: 336, speed: 1.0, tier: 1, damage: 0 };
+    ITEMS[ITEM_IRON_INGOT]    = { kind: 'misc', name: 'Железный слиток',                  tile: TILE.IRON_INGOT,   stack: 64 };
+    ITEMS[ITEM_GOLD_INGOT]    = { kind: 'misc', name: 'Золотой слиток',                   tile: TILE.GOLD_INGOT,   stack: 64 };
+    ITEMS[ITEM_EMERALD]       = { kind: 'misc', name: 'Изумруд',                          tile: TILE.EMERALD,      stack: 64 };
+    ITEMS[ITEM_DIAMOND_GEM]   = { kind: 'misc', name: 'Алмаз',                            tile: TILE.DIAMOND_GEM,  stack: 64 };
+    ITEMS[ITEM_REDSTONE_DUST] = { kind: 'misc', name: 'Пыль редстоуна',                   tile: TILE.REDSTONE_DUST,stack: 64 };
+    ITEMS[ITEM_BONE]          = { kind: 'misc', name: 'Кость',                            tile: TILE.BONE,         stack: 64 };
+    ITEMS[ITEM_STRING]        = { kind: 'misc', name: 'Нить',                             tile: TILE.STRING,       stack: 64 };
+    ITEMS[ITEM_GUNPOWDER]     = { kind: 'misc', name: 'Порох',                            tile: TILE.GUNPOWDER,    stack: 64 };
+    ITEMS[ITEM_FLINT]         = { kind: 'misc', name: 'Кремень',                          tile: TILE.FLINT,        stack: 64 };
+    ITEMS[ITEM_DGM_COIN]      = { kind: 'misc', name: 'DGM-монета',                       tile: TILE.DGM_COIN,     stack: 999 };
+    ITEMS[ITEM_LOOTBOX_COMMON]= { kind: 'misc', name: 'Обычный сундук',                   tile: TILE.LOOTBOX_COMMON,stack: 16 };
+    ITEMS[ITEM_LOOTBOX_RARE]  = { kind: 'misc', name: 'Редкий сундук',                    tile: TILE.LOOTBOX_RARE, stack: 16 };
+    ITEMS[ITEM_LOOTBOX_EPIC]  = { kind: 'misc', name: 'Легендарный сундук',               tile: TILE.LOOTBOX_EPIC, stack: 16 };
+    ITEMS[ITEM_DAGGER]        = { kind: 'tool', toolType: 'sword', name: 'Кинжал',         tile: TILE.DAGGER,       stack: 1, maxDurability: 96, speed: 1.5, tier: 1, damage: 4 };
     // Wheat is an ingredient, not eaten directly: keep kind=misc so it
     // doesn't trigger the eat-on-rmb hold.
     ITEMS[ITEM_WHEAT].kind = 'misc';
@@ -4674,6 +4765,149 @@
         ctx.fillStyle = '#555';
         ctx.fillRect(6, 6, 1, 1); ctx.fillRect(9, 8, 1, 1);
     }
+    function drawBowIcon(ctx) {
+        // Curved wooden bow + drawn string.
+        ctx.fillStyle = '#7a4a1a';
+        ctx.fillRect(11, 2, 2, 1); ctx.fillRect(12, 3, 1, 2); ctx.fillRect(13, 4, 1, 4);
+        ctx.fillRect(13, 8, 1, 4); ctx.fillRect(12, 11, 1, 2); ctx.fillRect(11, 13, 2, 1);
+        ctx.fillStyle = '#a06628';
+        ctx.fillRect(12, 5, 1, 6);
+        ctx.fillStyle = '#dadada';
+        ctx.fillRect(2, 2, 1, 1); ctx.fillRect(11, 13, 1, 1);
+        for (let i = 3; i < 13; i++) ctx.fillRect(i, i, 1, 1);
+        ctx.fillStyle = '#7a4a1a'; ctx.fillRect(2, 2, 2, 2); ctx.fillRect(2, 12, 2, 2);
+    }
+    function drawArrowIcon(ctx) {
+        ctx.fillStyle = '#cfcfcf';
+        ctx.fillRect(2, 2, 1, 1); ctx.fillRect(3, 3, 1, 1);
+        ctx.fillStyle = '#888';
+        ctx.fillRect(2, 4, 1, 1); ctx.fillRect(4, 2, 1, 1);
+        ctx.fillStyle = '#a07040';
+        for (let i = 0; i < 9; i++) ctx.fillRect(4 + i, 4 + i, 1, 1);
+        ctx.fillStyle = '#dadada';
+        ctx.fillRect(11, 11, 1, 1); ctx.fillRect(12, 12, 1, 1); ctx.fillRect(13, 13, 1, 1);
+        ctx.fillStyle = '#9eb0c8';
+        ctx.fillRect(13, 11, 1, 1); ctx.fillRect(11, 13, 1, 1);
+    }
+    function drawShieldIcon(ctx) {
+        ctx.fillStyle = '#7a4a1a';
+        ctx.fillRect(3, 2, 10, 9); ctx.fillRect(4, 11, 8, 1); ctx.fillRect(5, 12, 6, 1);
+        ctx.fillRect(6, 13, 4, 1); ctx.fillRect(7, 14, 2, 1);
+        ctx.fillStyle = '#9c6028';
+        ctx.fillRect(4, 3, 8, 1);
+        ctx.fillStyle = '#cccccc';
+        ctx.fillRect(4, 2, 1, 9); ctx.fillRect(11, 2, 1, 9);
+        ctx.fillStyle = '#d83030';
+        ctx.fillRect(7, 5, 2, 4); ctx.fillRect(6, 6, 4, 1);
+    }
+    function drawIngotIcon(ctx, body, hi, lo) {
+        ctx.fillStyle = body; ctx.fillRect(3, 7, 10, 4);
+        ctx.fillStyle = hi;   ctx.fillRect(3, 7, 10, 1); ctx.fillRect(3, 7, 1, 4);
+        ctx.fillStyle = lo;   ctx.fillRect(3, 10, 10, 1); ctx.fillRect(12, 7, 1, 4);
+        ctx.fillStyle = hi;   ctx.fillRect(5, 8, 2, 1); ctx.fillRect(9, 8, 2, 1);
+    }
+    function drawIronIngot(ctx)   { drawIngotIcon(ctx, '#cfcfcf', '#f0f0f0', '#888'); }
+    function drawGoldIngot(ctx)   { drawIngotIcon(ctx, '#e0b020', '#ffe070', '#a07810'); }
+    function drawEmeraldIcon(ctx) {
+        ctx.fillStyle = '#1aa860'; ctx.fillRect(4, 3, 8, 10);
+        ctx.fillStyle = '#3ed080'; ctx.fillRect(4, 3, 8, 1); ctx.fillRect(4, 3, 1, 10);
+        ctx.fillStyle = '#0e7040'; ctx.fillRect(11, 3, 1, 10); ctx.fillRect(4, 12, 8, 1);
+        ctx.fillStyle = '#a8ffd0'; ctx.fillRect(6, 5, 2, 2);
+    }
+    function drawDiamondGem(ctx) {
+        ctx.fillStyle = '#5fdfff'; ctx.fillRect(5, 4, 6, 1); ctx.fillRect(4, 5, 8, 4); ctx.fillRect(5, 9, 6, 1); ctx.fillRect(6, 10, 4, 1); ctx.fillRect(7, 11, 2, 1);
+        ctx.fillStyle = '#a0f0ff'; ctx.fillRect(5, 4, 4, 1); ctx.fillRect(4, 5, 1, 3);
+        ctx.fillStyle = '#1c8fb8'; ctx.fillRect(11, 5, 1, 3); ctx.fillRect(7, 11, 2, 1);
+    }
+    function drawRedstoneDust(ctx) {
+        ctx.fillStyle = '#a02020';
+        ctx.fillRect(7, 2, 2, 1); ctx.fillRect(2, 7, 1, 2); ctx.fillRect(13, 7, 1, 2); ctx.fillRect(7, 13, 2, 1);
+        ctx.fillRect(7, 7, 2, 2);
+        ctx.fillRect(5, 5, 1, 1); ctx.fillRect(10, 5, 1, 1); ctx.fillRect(5, 10, 1, 1); ctx.fillRect(10, 10, 1, 1);
+        ctx.fillStyle = '#ff5050';
+        ctx.fillRect(7, 7, 1, 1);
+    }
+    function drawBoneIcon(ctx) {
+        ctx.fillStyle = '#fafad8';
+        ctx.fillRect(3, 4, 2, 2); ctx.fillRect(2, 5, 4, 1); ctx.fillRect(11, 10, 2, 2); ctx.fillRect(10, 11, 4, 1);
+        for (let i = 0; i < 8; i++) ctx.fillRect(4 + i, 6 + i, 2, 1);
+        ctx.fillStyle = '#c8c89c';
+        ctx.fillRect(2, 6, 4, 1); ctx.fillRect(10, 12, 4, 1);
+    }
+    function drawStringIcon(ctx) {
+        ctx.fillStyle = '#f0f0f0';
+        for (let i = 0; i < 12; i++) {
+            const y = 3 + Math.round(Math.sin(i * 0.6) * 1.5);
+            ctx.fillRect(2 + i, y + 4, 1, 1);
+        }
+        ctx.fillStyle = '#bcbcbc';
+        for (let i = 0; i < 12; i++) {
+            const y = 3 + Math.round(Math.sin(i * 0.6) * 1.5);
+            ctx.fillRect(2 + i, y + 5, 1, 1);
+        }
+    }
+    function drawGunpowderIcon(ctx) {
+        ctx.fillStyle = '#202020'; ctx.fillRect(3, 5, 10, 7);
+        ctx.fillStyle = '#3a3a3a'; ctx.fillRect(3, 5, 10, 1); ctx.fillRect(3, 5, 1, 7);
+        ctx.fillStyle = '#0a0a0a'; ctx.fillRect(3, 11, 10, 1); ctx.fillRect(12, 5, 1, 7);
+        ctx.fillStyle = '#555';
+        ctx.fillRect(5, 7, 1, 1); ctx.fillRect(8, 9, 1, 1); ctx.fillRect(10, 7, 1, 1);
+    }
+    function drawFlintIcon(ctx) {
+        ctx.fillStyle = '#3c3c3c';
+        ctx.fillRect(4, 5, 8, 1); ctx.fillRect(3, 6, 10, 4); ctx.fillRect(4, 10, 8, 1);
+        ctx.fillStyle = '#5a5a5a';
+        ctx.fillRect(4, 6, 1, 1); ctx.fillRect(5, 5, 6, 1); ctx.fillRect(11, 6, 1, 1);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(4, 9, 1, 1); ctx.fillRect(11, 9, 1, 1); ctx.fillRect(5, 10, 6, 1);
+    }
+    function drawCoinIcon(ctx) {
+        ctx.fillStyle = '#e0a020';
+        ctx.fillRect(4, 3, 8, 10); ctx.fillRect(3, 4, 10, 8);
+        ctx.fillStyle = '#ffe070';
+        ctx.fillRect(5, 3, 6, 1); ctx.fillRect(3, 5, 1, 6);
+        ctx.fillStyle = '#a07810';
+        ctx.fillRect(5, 12, 6, 1); ctx.fillRect(12, 5, 1, 6);
+        ctx.fillStyle = '#3a2a08';
+        ctx.fillRect(7, 6, 2, 1); ctx.fillRect(6, 7, 1, 2); ctx.fillRect(9, 7, 1, 2); ctx.fillRect(7, 9, 2, 1);
+    }
+    function drawLootboxIcon(ctx, tier) {
+        // Tier 0=common (wooden), 1=rare (iron), 2=epic (purple).
+        const palette = [
+            { box: '#7a4a1a', hi: '#a06628', lo: '#3a2208', metal: '#cccccc' },
+            { box: '#8a8a8a', hi: '#bdbdbd', lo: '#555',     metal: '#ffe070' },
+            { box: '#5a2a8a', hi: '#9050d0', lo: '#2a0c4a',  metal: '#ffe070' }
+        ][tier || 0];
+        ctx.fillStyle = palette.box;
+        ctx.fillRect(2, 5, 12, 8);
+        ctx.fillStyle = palette.hi;
+        ctx.fillRect(2, 5, 12, 1); ctx.fillRect(2, 5, 1, 8);
+        ctx.fillStyle = palette.lo;
+        ctx.fillRect(13, 5, 1, 8); ctx.fillRect(2, 12, 12, 1);
+        // Lid.
+        ctx.fillStyle = palette.box; ctx.fillRect(2, 4, 12, 2);
+        ctx.fillStyle = palette.hi; ctx.fillRect(2, 4, 12, 1);
+        // Lock & metal band.
+        ctx.fillStyle = palette.metal;
+        ctx.fillRect(7, 7, 2, 3);
+        ctx.fillRect(2, 8, 12, 1);
+        if (tier === 2) { // sparkle
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(4, 6, 1, 1); ctx.fillRect(11, 10, 1, 1);
+        }
+    }
+    function drawDaggerIcon(ctx) {
+        // Diagonal blade with a hilt — crossguard + grip.
+        ctx.fillStyle = '#7a4a1a'; // hilt grip
+        ctx.fillRect(2, 12, 2, 2); ctx.fillRect(3, 11, 2, 2);
+        ctx.fillStyle = '#dadada'; // blade
+        for (let i = 0; i < 8; i++) ctx.fillRect(4 + i, 11 - i, 1, 1);
+        for (let i = 0; i < 7; i++) ctx.fillRect(5 + i, 11 - i, 1, 1);
+        ctx.fillStyle = '#ffffff';
+        for (let i = 0; i < 4; i++) ctx.fillRect(4 + i, 11 - i, 1, 1);
+        ctx.fillStyle = '#888'; // crossguard
+        ctx.fillRect(3, 10, 4, 1); ctx.fillRect(2, 11, 4, 1);
+    }
 
     function createBlockAtlas() {
         const c = document.createElement('canvas');
@@ -4763,7 +4997,25 @@
             [TILE.COOKED_PORK]:  (ctx) => drawMeatIcon(ctx, false),
             [TILE.COOKIE]:       drawCookieIcon,
             [TILE.MUSHROOM_STEW]: drawStewIcon,
-            [TILE.COAL_ITEM]:    drawCoalItemIcon
+            [TILE.COAL_ITEM]:    drawCoalItemIcon,
+
+            [TILE.BOW]:           drawBowIcon,
+            [TILE.ARROW_ITEM]:    drawArrowIcon,
+            [TILE.SHIELD]:        drawShieldIcon,
+            [TILE.IRON_INGOT]:    drawIronIngot,
+            [TILE.GOLD_INGOT]:    drawGoldIngot,
+            [TILE.EMERALD]:       drawEmeraldIcon,
+            [TILE.DIAMOND_GEM]:   drawDiamondGem,
+            [TILE.REDSTONE_DUST]: drawRedstoneDust,
+            [TILE.BONE]:          drawBoneIcon,
+            [TILE.STRING]:        drawStringIcon,
+            [TILE.GUNPOWDER]:     drawGunpowderIcon,
+            [TILE.FLINT]:         drawFlintIcon,
+            [TILE.DGM_COIN]:      drawCoinIcon,
+            [TILE.LOOTBOX_COMMON]:(ctx) => drawLootboxIcon(ctx, 0),
+            [TILE.LOOTBOX_RARE]:  (ctx) => drawLootboxIcon(ctx, 1),
+            [TILE.LOOTBOX_EPIC]:  (ctx) => drawLootboxIcon(ctx, 2),
+            [TILE.DAGGER]:        drawDaggerIcon
         };
 
         for (const [k, fn] of Object.entries(drawers)) {
@@ -5776,7 +6028,11 @@
 
         // Drop item only if the held tool meets the block's requirement.
         // Hand-mining still works for "soft" blocks (no requirement).
-        if (canHarvest(type)) {
+        // In Creative we always drop so the player can actually pick up
+        // anything they break (Mojang Creative skips drops, but for this
+        // sandbox we keep them so the inventory fills up while you mine).
+        const dropAllowed = (game.gameMode !== 0) || canHarvest(type);
+        if (dropAllowed) {
             // Tall grass / dead bush -> chance for wheat (Minecraft-like).
             if (type === BLOCKS.TALL_GRASS || type === BLOCKS.DEAD_BUSH) {
                 if (Math.random() < 0.25) {
@@ -5786,6 +6042,15 @@
                 if (Math.random() < 0.05) {
                     spawnDroppedItem(ITEM_APPLE, 1, x + 0.5, y + 0.5, z + 0.5);
                 }
+            } else if (type === BLOCKS.STONE && game.gameMode === 0) {
+                // Survival: stone breaks into cobble (Minecraft-like).
+                spawnDroppedBlock(x, y, z, BLOCKS.COBBLESTONE);
+            } else if (type === BLOCKS.GRASS && game.gameMode === 0) {
+                // Survival: grass breaks into dirt unless silk-touch tool used
+                // (we don't have silk-touch yet, so always dirt).
+                spawnDroppedBlock(x, y, z, BLOCKS.DIRT);
+            } else if (type === BLOCKS.COAL_ORE && game.gameMode === 0) {
+                spawnDroppedItem(ITEM_COAL, 1, x + 0.5, y + 0.5, z + 0.5);
             } else {
                 spawnDroppedBlock(x, y, z, type);
             }
@@ -5870,6 +6135,14 @@
         if (!held || held.type !== e.type || held.count <= 0) {
             game.player.eating = null;
             return;
+        }
+        // Periodic chomp sound.
+        if (typeof audio !== 'undefined' && audio.eat) {
+            const idx = Math.floor(t / 220);
+            if (idx > (e.lastChomp || -1)) {
+                e.lastChomp = idx;
+                audio.eat();
+            }
         }
         if (t >= e.duration) {
             // Consume one item, restore hunger.
@@ -6088,9 +6361,15 @@
                 if (typeof tryAttackMob === 'function') tryAttackMob();
             }
             if (e.button === 2) {
-                // Right-click: eat held food, otherwise place a block.
+                // Right-click priority: lootbox -> food -> place block.
                 const held = HOTBAR_ITEMS[game.ui.selectedSlot];
-                if (held && held.count > 0 && isFoodItem(held.type)) {
+                if (held && held.count > 0 && (
+                    held.type === ITEM_LOOTBOX_COMMON ||
+                    held.type === ITEM_LOOTBOX_RARE ||
+                    held.type === ITEM_LOOTBOX_EPIC
+                )) {
+                    tryOpenLootboxFromHotbar();
+                } else if (held && held.count > 0 && isFoodItem(held.type)) {
                     startEating();
                 } else {
                     placeBlock();
@@ -6708,6 +6987,8 @@
 
         // Daily-login achievement check on game start.
         try { checkDailyLogin(); } catch (e) { console.error('daily login check failed:', e); }
+        // Reapply max-HP / autofeed perks bought in prior sessions.
+        try { applyPersistedPerks(); } catch (e) { console.error('perks apply failed:', e); }
 
         gameLoop();
     }
@@ -7962,15 +8243,19 @@
             const lootMap = {
                 beef: ITEM_RAW_BEEF,
                 pork: ITEM_RAW_PORK,
-                rotten: null,
-                bone: null,
-                gunpowder: null,
-                string: null
+                bone: ITEM_BONE,
+                gunpowder: ITEM_GUNPOWDER,
+                string: ITEM_STRING
             };
             const lootId = lootMap[mob.def.loot];
             if (lootId != null && typeof spawnDroppedItem === 'function') {
                 const n = 1 + Math.floor(Math.random() * 2);
                 spawnDroppedItem(lootId, n, mob.pos.x, mob.pos.y + 0.5, mob.pos.z);
+            }
+            // Always grant a coin for killing any non-NPC mob.
+            if (!mob.def.npc && typeof spawnDroppedItem === 'function') {
+                const coins = 1 + Math.floor(Math.random() * 3);
+                spawnDroppedItem(ITEM_DGM_COIN, coins, mob.pos.x, mob.pos.y + 0.5, mob.pos.z);
             }
         }
         if (game.scene && mob.mesh) game.scene.remove(mob.mesh);
@@ -8812,6 +9097,291 @@
             if (host) host.style.display = 'none';
         }
     });
+
+    // ============================================================================
+    // PAY-TO-WIN SHOP + COSMETIC LOOTBOXES
+    // ============================================================================
+    //
+    // Wallet (DGM-coins) is stored in localStorage as `dgmcraft_wallet`.
+    // Shop entries that grant gameplay advantages (gear, food, perks) are
+    // explicitly marked PAY-TO-WIN. Lootboxes only grant cosmetic effects
+    // (chat colour, particle tint, item-frame trim, menu emblem) — they
+    // never change combat or movement.
+
+    const WALLET_KEY    = 'dgmcraft_wallet';
+    const COSMETIC_KEY  = 'dgmcraft_cosmetics';
+    const PERKS_KEY     = 'dgmcraft_perks';
+
+    function loadWallet()   { try { return JSON.parse(localStorage.getItem(WALLET_KEY))   || { coins: 0 }; } catch { return { coins: 0 }; } }
+    function saveWallet(w)  { try { localStorage.setItem(WALLET_KEY, JSON.stringify(w)); } catch {} }
+    function loadCosmetics(){ try { return JSON.parse(localStorage.getItem(COSMETIC_KEY))|| { skins: [], active: null }; } catch { return { skins: [], active: null }; } }
+    function saveCosmetics(c){ try { localStorage.setItem(COSMETIC_KEY, JSON.stringify(c)); } catch {} }
+    function loadPerks()    { try { return JSON.parse(localStorage.getItem(PERKS_KEY))   || {}; } catch { return {}; } }
+    function savePerks(p)   { try { localStorage.setItem(PERKS_KEY, JSON.stringify(p)); } catch {} }
+
+    function addCoins(n) {
+        const w = loadWallet();
+        w.coins = Math.max(0, (w.coins || 0) + n);
+        saveWallet(w);
+        if (typeof refreshShopUI === 'function') refreshShopUI();
+    }
+    function spendCoins(n) {
+        const w = loadWallet();
+        if ((w.coins || 0) < n) return false;
+        w.coins -= n;
+        saveWallet(w);
+        if (typeof refreshShopUI === 'function') refreshShopUI();
+        return true;
+    }
+    // Pickup of a coin item — credit the wallet, do NOT add to inventory.
+    function tryConsumeCoinPickup(typeId, count) {
+        if (typeId !== ITEM_DGM_COIN) return false;
+        addCoins(count);
+        addChatMessage('§e+' + count + ' монет', 'normal');
+        return true;
+    }
+
+    // Shop catalog. PTW = grants gameplay advantage. Cosmetic-only items live
+    // in the lootbox section below.
+    const SHOP_ITEMS = [
+        { id: 'kit_diamond',     name: 'Алмазный набор',       desc: 'Кирка + меч + лопата + топор',           cost: 80,  grant() {
+            inventoryAdd(toolItemId('pickaxe', 'diamond'), 1);
+            inventoryAdd(toolItemId('sword',   'diamond'), 1);
+            inventoryAdd(toolItemId('shovel',  'diamond'), 1);
+            inventoryAdd(toolItemId('axe',     'diamond'), 1);
+        }, ptw: true },
+        { id: 'kit_iron',        name: 'Железный набор',       desc: 'Кирка + меч + лопата',                    cost: 25,  grant() {
+            inventoryAdd(toolItemId('pickaxe', 'iron'), 1);
+            inventoryAdd(toolItemId('sword',   'iron'), 1);
+            inventoryAdd(toolItemId('shovel',  'iron'), 1);
+        }, ptw: true },
+        { id: 'pack_food',       name: 'Продуктовый набор',    desc: '8× жареная говядина + 4× золотое яблоко', cost: 35,  grant() {
+            inventoryAdd(ITEM_COOKED_BEEF, 8);
+            inventoryAdd(ITEM_GOLDEN_APPLE, 4);
+        }, ptw: true },
+        { id: 'perk_hearts',     name: '+2 макс HP (навсегда)', desc: 'Поднимает максимальное HP на 4 единицы', cost: 60,  grant() {
+            const p = loadPerks();
+            p.maxHpBonus = (p.maxHpBonus || 0) + 4;
+            savePerks(p);
+            game.player.maxHp = (game.player.maxHp || 20) + 4;
+            game.player.hp = game.player.maxHp;
+        }, ptw: true },
+        { id: 'perk_mining',     name: 'Ускорение копания',     desc: '×1.5 скорость 30 минут реального времени', cost: 30, grant() {
+            const p = loadPerks();
+            p.miningBoostUntil = Date.now() + 30 * 60 * 1000;
+            savePerks(p);
+        }, ptw: true },
+        { id: 'perk_autofeed',   name: 'Авто-питание',          desc: 'Голод не падает 5 минут реального времени', cost: 20, grant() {
+            const p = loadPerks();
+            p.autoFeedUntil = Date.now() + 5 * 60 * 1000;
+            savePerks(p);
+        }, ptw: true },
+        { id: 'pack_arrows',     name: '64 стрелы + лук',       desc: 'Полный набор для лучника',               cost: 18,  grant() {
+            inventoryAdd(ITEM_BOW, 1);
+            inventoryAdd(ITEM_ARROW, 64);
+        }, ptw: true },
+
+        // Lootboxes - cosmetic only.
+        { id: 'lootbox_common',  name: 'Обычный сундук',        desc: 'Случайная косметика (зелёная редкость)',  cost: 10,  grant() {
+            inventoryAdd(ITEM_LOOTBOX_COMMON, 1);
+        } },
+        { id: 'lootbox_rare',    name: 'Редкий сундук',         desc: 'Случайная косметика (синяя редкость)',     cost: 40,  grant() {
+            inventoryAdd(ITEM_LOOTBOX_RARE, 1);
+        } },
+        { id: 'lootbox_epic',    name: 'Легендарный сундук',    desc: 'Случайная косметика (фиолетовая редкость)', cost: 150, grant() {
+            inventoryAdd(ITEM_LOOTBOX_EPIC, 1);
+        } }
+    ];
+
+    // Cosmetic skin pool; rolled when a lootbox is opened.
+    const COSMETIC_POOL = {
+        common: [
+            { id: 'name_green',     label: 'Имя в чате — зелёное',     css: '#5cd05c' },
+            { id: 'name_yellow',    label: 'Имя в чате — жёлтое',      css: '#e8d044' },
+            { id: 'particle_blue',  label: 'Синие частицы блоков',     particle: '#5fa0ff' },
+            { id: 'particle_pink',  label: 'Розовые частицы блоков',   particle: '#ff7fc0' }
+        ],
+        rare: [
+            { id: 'name_cyan',      label: 'Имя в чате — циан',        css: '#5fdfff' },
+            { id: 'name_orange',    label: 'Имя в чате — оранжевое',   css: '#ff9040' },
+            { id: 'particle_gold',  label: 'Золотые искры частиц',     particle: '#ffd040' },
+            { id: 'frame_iron',     label: 'Железная рамка хотбара',   frame: '#bdbdbd' },
+            { id: 'frame_gold',     label: 'Золотая рамка хотбара',    frame: '#e0a020' }
+        ],
+        epic: [
+            { id: 'name_rainbow',   label: 'Имя в чате — радуга',      css: 'rainbow' },
+            { id: 'particle_neon',  label: 'Неоновые частицы',         particle: '#a0ffff' },
+            { id: 'frame_diamond',  label: 'Алмазная рамка хотбара',   frame: '#5fdfff' },
+            { id: 'emblem_dragon',  label: 'Эмблема дракона в меню',   emblem: 'dragon' },
+            { id: 'emblem_wither',  label: 'Эмблема визер в меню',     emblem: 'wither' }
+        ]
+    };
+
+    function rollLootbox(rarity) {
+        const pool = COSMETIC_POOL[rarity] || COSMETIC_POOL.common;
+        return pool[Math.floor(Math.random() * pool.length)];
+    }
+
+    function openLootboxByItemId(typeId) {
+        let rarity = 'common';
+        if (typeId === ITEM_LOOTBOX_RARE)  rarity = 'rare';
+        if (typeId === ITEM_LOOTBOX_EPIC)  rarity = 'epic';
+        const reward = rollLootbox(rarity);
+        const cos = loadCosmetics();
+        if (!cos.skins.find(s => s.id === reward.id)) {
+            cos.skins.push(reward);
+            cos.active = reward.id;
+        } else {
+            // Already owned — refund half the cost.
+            const refund = rarity === 'epic' ? 75 : (rarity === 'rare' ? 20 : 5);
+            addCoins(refund);
+            addChatMessage('§7Дубликат: компенсация ' + refund + ' монет', 'normal');
+        }
+        saveCosmetics(cos);
+        showLootboxToast(rarity, reward);
+        if (typeof audio !== 'undefined' && audio.achievementUnlock) audio.achievementUnlock();
+    }
+
+    function showLootboxToast(rarity, reward) {
+        let host = document.getElementById('lootbox-toast');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'lootbox-toast';
+            host.style.cssText = 'position:fixed;left:50%;top:38%;transform:translate(-50%,-50%);background:#1a1a1a;border:3px solid #888;color:#fff;padding:20px 28px;font-family:"Press Start 2P",monospace;text-align:center;z-index:99999;box-shadow:0 0 0 4px #000;';
+            document.body.appendChild(host);
+        }
+        const colour = rarity === 'epic' ? '#c060ff' : (rarity === 'rare' ? '#5fdfff' : '#5cd05c');
+        host.innerHTML = '<div style="color:'+colour+';font-size:11px;margin-bottom:10px">★ Сундук: ' + rarity.toUpperCase() + '</div>'
+                       + '<div style="font-size:10px;color:#fff;margin-bottom:6px">' + reward.label + '</div>'
+                       + '<div style="font-size:8px;color:#aaa">(косметика, не влияет на геймплей)</div>';
+        host.style.display = 'block';
+        clearTimeout(host._timer);
+        host._timer = setTimeout(() => { host.style.display = 'none'; }, 4000);
+    }
+
+    function refreshShopUI() {
+        const host = document.getElementById('shop-panel');
+        if (!host || host.style.display !== 'flex') return;
+        renderShopPanel();
+    }
+
+    function renderShopPanel() {
+        const host = document.getElementById('shop-panel');
+        const wallet = loadWallet();
+        const cos = loadCosmetics();
+        const ptw = SHOP_ITEMS.filter(s => s.ptw);
+        const boxes = SHOP_ITEMS.filter(s => !s.ptw);
+        let html = '<div style="font-size:14px;margin-bottom:6px">DGM-магазин <span style="float:right;font-size:11px;color:#a06000">' + wallet.coins + ' монет</span></div>'
+                 + '<div style="font-size:9px;color:#a04040;margin-bottom:14px">Pay-to-win: открыто покупаемые преимущества</div>'
+                 + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px;margin-bottom:14px">';
+        for (const s of ptw) {
+            const can = wallet.coins >= s.cost;
+            html += '<div style="background:#c0a060;border:2px solid #1a1a1a;padding:6px;font-size:9px">'
+                  + '<div style="font-size:10px;margin-bottom:4px">' + s.name + '</div>'
+                  + '<div style="font-size:8px;margin-bottom:6px;color:#1a1a1a">' + s.desc + '</div>'
+                  + '<button data-shop="'+s.id+'" '+(can?'':'disabled')+' style="font-size:9px;padding:3px 6px">Купить за '+s.cost+'</button>'
+                  + '</div>';
+        }
+        html += '</div><div style="font-size:11px;margin-bottom:6px">Лутбоксы (косметика, не влияют на геймплей)</div>'
+              + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">';
+        for (const s of boxes) {
+            const can = wallet.coins >= s.cost;
+            const tier = s.id.includes('epic') ? '#c060ff' : (s.id.includes('rare') ? '#5fdfff' : '#5cd05c');
+            html += '<div style="background:#444;color:#fff;border:2px solid '+tier+';padding:6px;font-size:9px">'
+                  + '<div style="font-size:10px;margin-bottom:4px;color:'+tier+'">' + s.name + '</div>'
+                  + '<div style="font-size:8px;margin-bottom:6px">' + s.desc + '</div>'
+                  + '<button data-shop="'+s.id+'" '+(can?'':'disabled')+' style="font-size:9px;padding:3px 6px">Купить за '+s.cost+'</button>'
+                  + '</div>';
+        }
+        html += '</div>'
+              + '<div style="margin-top:12px;font-size:9px">Активная косметика: <span style="color:#3060c0">' + (cos.active || '—') + '</span></div>'
+              + '<div style="margin-top:6px;font-size:9px">Получено: ' + cos.skins.length + ' / ' + (COSMETIC_POOL.common.length + COSMETIC_POOL.rare.length + COSMETIC_POOL.epic.length) + '</div>'
+              + '<div style="margin-top:14px;font-size:8px;color:#444">Закрой окно: щёлкни вне или нажми Esc / B.</div>';
+        const inner = host.querySelector('.shop-inner');
+        if (inner) inner.innerHTML = html;
+    }
+
+    function showShopPanel() {
+        let host = document.getElementById('shop-panel');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'shop-panel';
+            host.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);z-index:9000;';
+            host.addEventListener('click', e => { if (e.target === host) host.style.display = 'none'; });
+            const inner = document.createElement('div');
+            inner.className = 'shop-inner';
+            inner.style.cssText = 'background:#dadada;border:4px solid #1a1a1a;padding:18px 22px;font-family:"Press Start 2P",monospace;color:#1a1a1a;max-width:780px;width:92%;max-height:84vh;overflow-y:auto;';
+            host.appendChild(inner);
+            document.body.appendChild(host);
+            inner.addEventListener('click', e => {
+                const btn = e.target.closest('[data-shop]');
+                if (!btn) return;
+                const id = btn.getAttribute('data-shop');
+                const sh = SHOP_ITEMS.find(s => s.id === id);
+                if (!sh) return;
+                if (!spendCoins(sh.cost)) {
+                    addChatMessage('§cНе хватает монет', 'normal');
+                    return;
+                }
+                sh.grant();
+                addChatMessage('§eКуплено: §f' + sh.name, 'success');
+                if (typeof audio !== 'undefined' && audio.uiClick) audio.uiClick();
+                setupHotbar();
+                if (game.ui.inventory) renderInventoryAll();
+                renderShopPanel();
+            });
+        }
+        host.style.display = 'flex';
+        renderShopPanel();
+    }
+
+    // Open lootbox via right-click on hotbar / inventory slot. Hooked up via
+    // existing slot click code by intercepting useHeldItem().
+    function tryOpenLootboxFromHotbar() {
+        const slot = HOTBAR_ITEMS[game.ui.selectedSlot];
+        if (!slot || slot.count <= 0) return false;
+        if (slot.type !== ITEM_LOOTBOX_COMMON
+         && slot.type !== ITEM_LOOTBOX_RARE
+         && slot.type !== ITEM_LOOTBOX_EPIC) return false;
+        openLootboxByItemId(slot.type);
+        slot.count--;
+        if (slot.count <= 0) clearSlot(slot);
+        setupHotbar();
+        return true;
+    }
+
+    // Hotkey: B opens the shop.
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyB' && !e.repeat && !e.target.matches('input,textarea')) {
+            const host = document.getElementById('shop-panel');
+            if (host && host.style.display === 'flex') host.style.display = 'none';
+            else showShopPanel();
+        }
+        if (e.code === 'Escape') {
+            const host = document.getElementById('shop-panel');
+            if (host) host.style.display = 'none';
+        }
+    });
+
+    // Periodic perk tick — drain auto-feed and mining-boost timers cleanly,
+    // plus apply auto-feed to the player vitals.
+    setInterval(() => {
+        const p = loadPerks();
+        if (p.autoFeedUntil && p.autoFeedUntil > Date.now()) {
+            if (game && game.player) {
+                game.player.hunger = Math.min(20, (game.player.hunger || 0) + 1);
+            }
+        }
+    }, 4000);
+
+    // Apply persisted maxHpBonus on game start.
+    function applyPersistedPerks() {
+        const p = loadPerks();
+        if (p.maxHpBonus && game.player) {
+            game.player.maxHp = (game.player.maxHp || 20) + p.maxHpBonus;
+            game.player.hp = Math.min(game.player.maxHp, (game.player.hp || game.player.maxHp));
+        }
+    }
 
     // Start
     init();
