@@ -2657,6 +2657,11 @@
     }
 
     function updateDroppedItems(dt) {
+        const playerCentre = game.player.pos.clone
+            ? game.player.pos.clone()
+            : new THREE.Vector3(game.player.pos.x, game.player.pos.y, game.player.pos.z);
+        playerCentre.y += 0.6;
+
         for (let i = game.droppedItems.length - 1; i >= 0; i--) {
             const item = game.droppedItems[i];
             const data = item.userData;
@@ -2669,7 +2674,10 @@
             item.position.y += data.velocity.y * dt;
             item.position.z += data.velocity.z * dt;
 
-            // Ground collision
+            // Ground collision — `getGroundHeight` returns the highest solid
+            // surface in this column, so a freshly-spawned drop that started
+            // *inside* a soon-to-be-AIR voxel (the block we just broke) is
+            // popped up to the surface rather than left clipping below ground.
             const groundY = getGroundHeight(item.position.x, item.position.z) + 0.15;
             if (item.position.y < groundY) {
                 item.position.y = groundY;
@@ -2690,20 +2698,21 @@
                 continue;
             }
 
-            // Pickup if close to player — uses the unified inventory helper so
-            // overflow falls through into the 27-slot main inventory.
-            // Slightly larger pickup radius and stronger magnetism: items
-            // within ~3 blocks accelerate toward the player so they don't
-            // get stuck on terrain edges (a frequent cause of "stone didn't
-            // enter inventory" reports).
-            const playerCentre = game.player.pos.clone ? game.player.pos.clone() : new THREE.Vector3(game.player.pos.x, game.player.pos.y, game.player.pos.z);
-            playerCentre.y += 0.6;
+            // Pickup with very forgiving radius + strong magnetism. Items
+            // within 4 blocks accelerate toward the player; once within 2.4
+            // they enter the inventory (or wallet, for coins).
             const dist = item.position.distanceTo(playerCentre);
-            if (dist < 3.0) {
-                const pull = playerCentre.clone().sub(item.position).multiplyScalar(8 * dt);
+            if (dist < 4.0) {
+                const pull = playerCentre.clone().sub(item.position).multiplyScalar(10 * dt);
                 item.position.add(pull);
+                // Cancel velocity once close so gravity doesn't fight magnetism.
+                if (dist < 2.0) {
+                    data.velocity.x *= 0.4;
+                    data.velocity.y *= 0.4;
+                    data.velocity.z *= 0.4;
+                }
             }
-            if (dist < 1.8) {
+            if (dist < 2.4) {
                 // Coins go straight to the wallet, never to inventory.
                 if (typeof tryConsumeCoinPickup === 'function'
                     && tryConsumeCoinPickup(data.blockType, 1)) {
@@ -2716,15 +2725,33 @@
                 if (inventoryAdd(data.blockType, 1)) {
                     if (typeof audio !== 'undefined' && audio.uiClick) audio.uiClick();
                     setupHotbar();
-                    if (game.ui.inventory) setupInventory();
+                    if (game.ui.inventory) renderInventoryAll();
+                    // Brief pickup confirmation so the user can see what landed
+                    // in the inventory. Throttled to avoid chat spam — only
+                    // first time per second per item type.
+                    const nowMs = performance.now();
+                    if (!game._lastPickupChatAt) game._lastPickupChatAt = {};
+                    const key = String(data.blockType);
+                    if ((nowMs - (game._lastPickupChatAt[key] || 0)) > 1500) {
+                        game._lastPickupChatAt[key] = nowMs;
+                        const label = isItemId(data.blockType)
+                            ? (ITEMS[data.blockType]?.name || ('item#' + data.blockType))
+                            : (BLOCK_DATA[data.blockType]?.name || ('block#' + data.blockType));
+                        addChatMessage('§a+1 ' + label, 'normal');
+                    }
                     game.scene.remove(item);
                     game.droppedItems.splice(i, 1);
                 } else if (inventoryCountOf(data.blockType) > before) {
                     setupHotbar();
                     game.scene.remove(item);
                     game.droppedItems.splice(i, 1);
+                } else {
+                    // Inventory really is full — warn the user once.
+                    if (!game._invFullWarnedAt || performance.now() - game._invFullWarnedAt > 4000) {
+                        game._invFullWarnedAt = performance.now();
+                        addChatMessage('§cИнвентарь полон — освободи место', 'error');
+                    }
                 }
-                // else inventory full — leave the dropped item to despawn naturally
             }
         }
     }
@@ -3330,9 +3357,9 @@
             );
             m.userData = {
                 velocity: new THREE.Vector3(
-                    (Math.random() - 0.5) * 2,
-                    3,
-                    (Math.random() - 0.5) * 2
+                    (Math.random() - 0.5) * 1.2,
+                    2.5,
+                    (Math.random() - 0.5) * 1.2
                 ),
                 blockType: typeId,
                 lifetime: 300,
@@ -6411,13 +6438,21 @@
         // Pickaxe-tier still controls the *quality* of the drop for ores —
         // wrong tier drops the raw ore block so it isn't completely lost,
         // but the player loses access to the smelted item until they upgrade.
-        // (This is a deliberate UX deviation from Mojang's "no drop without
-        // the right tool" rule, because users were seeing stone disappear
-        // with an empty hand and treating it as a bug.)
         const ht = heldTool();
         const tier = (ht && ht.def.toolType === 'pickaxe') ? ht.def.tier : 0;
 
-        // Tall grass / dead bush -> chance for wheat (Minecraft-like).
+        // Sound + particles use the original block type, so do them BEFORE we
+        // clear the voxel.
+        spawnBlockBreakParticles(type, x, y, z);
+        if (typeof audio !== 'undefined') audio.blockBreak(type);
+
+        // Clear the voxel FIRST so the dropped item doesn't spawn inside a
+        // still-solid block (which used to make the ground-collision check
+        // teleport it back to the surface, far away from the player).
+        setBlock(x, y, z, BLOCKS.AIR);
+
+        // Decide what to drop. We always spawn the drop AFTER the block is
+        // cleared so it sits in real air space.
         if (type === BLOCKS.TALL_GRASS || type === BLOCKS.DEAD_BUSH) {
             if (Math.random() < 0.25) {
                 spawnDroppedItem(ITEM_WHEAT, 1, x + 0.5, y + 0.5, z + 0.5);
@@ -6427,17 +6462,12 @@
                 spawnDroppedItem(ITEM_APPLE, 1, x + 0.5, y + 0.5, z + 0.5);
             }
         } else if (type === BLOCKS.STONE && game.gameMode === 0) {
-            // Survival: stone always drops cobble.
             spawnDroppedBlock(x, y, z, BLOCKS.COBBLESTONE);
         } else if (type === BLOCKS.GRASS && game.gameMode === 0) {
-            // Survival: grass always drops dirt.
             spawnDroppedBlock(x, y, z, BLOCKS.DIRT);
         } else if (type === BLOCKS.COAL_ORE && game.gameMode === 0) {
-            // Coal ore always drops a coal item (any pickaxe is enough).
             spawnDroppedItem(ITEM_COAL, 1, x + 0.5, y + 0.5, z + 0.5);
         } else if (type === BLOCKS.IRON_ORE && game.gameMode === 0) {
-            // Iron requires stone pickaxe (tier >=2) for ingot drop;
-            // otherwise drop the raw ore block.
             if (tier >= 2) spawnDroppedItem(ITEM_IRON_INGOT, 1, x + 0.5, y + 0.5, z + 0.5);
             else spawnDroppedBlock(x, y, z, BLOCKS.IRON_ORE);
         } else if (type === BLOCKS.GOLD_ORE && game.gameMode === 0) {
@@ -6447,17 +6477,8 @@
             if (tier >= 3) spawnDroppedItem(ITEM_DIAMOND_GEM, 1, x + 0.5, y + 0.5, z + 0.5);
             else spawnDroppedBlock(x, y, z, BLOCKS.DIAMOND_ORE);
         } else {
-            // Default: drop the block itself (always).
             spawnDroppedBlock(x, y, z, type);
         }
-
-        // Burst of pixel-art particles using same texture atlas.
-        spawnBlockBreakParticles(type, x, y, z);
-
-        // Sound feedback (different timbre per material).
-        if (typeof audio !== 'undefined') audio.blockBreak(type);
-
-        setBlock(x, y, z, BLOCKS.AIR);
 
         // Wear the tool (one durability point per block, only in survival).
         if (game.gameMode === 0) damageHeldTool(1);
@@ -6488,10 +6509,12 @@
         );
 
         item.userData = {
+            // Lower spawn velocity than before — keeps the drop next to the
+            // broken voxel instead of throwing it 3 m away on uneven terrain.
             velocity: new THREE.Vector3(
-                (Math.random() - 0.5) * 3,
-                4,
-                (Math.random() - 0.5) * 3
+                (Math.random() - 0.5) * 1.5,
+                2.5,
+                (Math.random() - 0.5) * 1.5
             ),
             blockType: blockType,
             lifetime: 300,
