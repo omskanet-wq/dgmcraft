@@ -1,0 +1,14 @@
+{
+  "appId": "com.afterfall.bastion",
+  "appName": "Afterfall",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "always"
+  }
+}

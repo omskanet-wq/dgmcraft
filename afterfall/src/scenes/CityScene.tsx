@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useGameStore, ambientBrightness, isNight } from '../state/useGameStore';
-import { generateWorld } from '../game/world';
+import { getWorld } from '../game/worldSingleton';
+import { setPlayerPos } from '../game/playerTracker';
 import { buildWorldGround } from '../game/worldGround';
 import { makeChunkManager, type LiveContainer } from '../game/chunks';
 import { rollContainerLoot } from '../game/loot';
@@ -89,7 +90,7 @@ export default function CityScene() {
     scene.add(moon);
 
     // World data + ground + chunks
-    const world = generateWorld(7);
+    const world = getWorld(7);
     const groundGroup = buildWorldGround(world);
     scene.add(groundGroup);
     const chunkMgr = makeChunkManager(world, scene, {
@@ -295,8 +296,11 @@ export default function CityScene() {
         lastChunkUpdate = now;
       }
 
-      // Movement
-      const speed = 5;
+      // Movement (sprint with Shift drains stamina)
+      const stState = useGameStore.getState();
+      const sprintWanted = !!keys['shift'] && stState.player.stamina > 4;
+      const sprintMul = sprintWanted ? 1.7 : 1;
+      const speed = 5 * sprintMul;
       const dirX = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
       const dirZ = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
       let mx = 0, mz = 0;
@@ -324,6 +328,8 @@ export default function CityScene() {
       player.position.z = Math.max(1, Math.min(world.size - 1, player.position.z + mz));
       const movDir = Math.hypot(mx, mz);
       if (movDir > 0.01) player.rotation.y = Math.atan2(mx, mz);
+      if (sprintWanted && movDir > 0.01) useGameStore.getState().modStamina(-12 * dt);
+      setPlayerPos(player.position.x, player.position.z);
 
       camera.position.set(player.position.x + 20, 30, player.position.z + 20);
       camera.lookAt(player.position.x, 0, player.position.z);

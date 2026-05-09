@@ -3,6 +3,7 @@ import { useGameStore, isNight } from '../state/useGameStore';
 import { ITEMS, RARITY_COLOR } from '../game/items';
 import Inventory from './Inventory';
 import Crafting from './Crafting';
+import Minimap from './Minimap';
 
 export default function HUD() {
   const player = useGameStore((s) => s.player);
@@ -41,12 +42,15 @@ export default function HUD() {
         <Meter label="STAMINA" value={player.stamina} max={player.staminaMax} color="#5fcf6e" icon="⚡" />
       </div>
 
-      {/* Top-right: clock */}
-      <div className="clock">
-        <div className={`clock-time${night ? ' night' : ''}`}>
-          {night ? '🌙' : '☀'} {time}
+      {/* Top-right: clock + minimap (city only) */}
+      <div className="top-right">
+        <div className="clock">
+          <div className={`clock-time${night ? ' night' : ''}`}>
+            {night ? '🌙' : '☀'} {time}
+          </div>
+          <div className="clock-day">DAY {dayCount}</div>
         </div>
-        <div className="clock-day">DAY {dayCount}</div>
+        {screen === 'city' && <Minimap />}
       </div>
 
       {/* Top-center: level + XP */}

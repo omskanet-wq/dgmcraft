@@ -182,14 +182,47 @@
   color: rgba(255,255,255,0.95);
 }
 
-.clock {
+.top-right {
   position: absolute;
   top: 12px; right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.clock {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 6px 10px;
   text-align: right;
+}
+.minimap {
+  position: relative;
+  width: 168px; height: 168px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: #0a0a14;
+  overflow: hidden;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.5);
+}
+.minimap-base, .minimap-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  image-rendering: pixelated;
+}
+.minimap-overlay { pointer-events: none; }
+.minimap-tag {
+  position: absolute;
+  bottom: 2px; right: 4px;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: rgba(255,255,255,0.6);
+  text-shadow: 0 1px 2px black;
+}
+@media (max-width: 720px) {
+  .minimap { width: 110px; height: 110px; }
 }
 .clock-time { font-size: 20px; font-weight: 700; }
 .clock-time.night { color: #8aaeff; }
