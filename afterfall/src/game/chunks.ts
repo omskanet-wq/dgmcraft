@@ -96,8 +96,14 @@ export function spawnChunk(
   const lights: ChunkLight[] = [];
   const fires: THREE.Mesh[] = [];
 
+  // Collect tree/bush placements first; render them as InstancedMesh
+  // (one draw call per geometry per chunk vs one Group per object).
+  const treePlacements: PlacedObject[] = [];
+  const bushPlacements: PlacedObject[] = [];
   for (const o of district.objects) {
     if (!enableTrees && (o.type === 'tree' || o.type === 'bush')) continue;
+    if (o.type === 'tree') { treePlacements.push(o); continue; }
+    if (o.type === 'bush') { bushPlacements.push(o); continue; }
     const obj = buildObject(o);
     if (!obj) continue;
     obj.position.set(o.x, 0, o.z);
@@ -143,8 +149,76 @@ export function spawnChunk(
     }
     group.add(obj);
   }
+  if (treePlacements.length > 0) addInstancedTrees(group, treePlacements, enableShadows);
+  if (bushPlacements.length > 0) addInstancedBushes(group, bushPlacements, enableShadows);
   scene.add(group);
   return { district, group, containers, emissiveMeshes, lights, fires };
+}
+
+let _trunkGeo: THREE.CylinderGeometry | null = null;
+let _trunkMat: THREE.MeshStandardMaterial | null = null;
+let _canopyGeo: THREE.SphereGeometry | null = null;
+let _canopyMat: THREE.MeshStandardMaterial | null = null;
+let _bushGeo: THREE.SphereGeometry | null = null;
+let _bushMat: THREE.MeshStandardMaterial | null = null;
+
+function addInstancedTrees(group: THREE.Group, items: PlacedObject[], shadows: boolean): void {
+  if (!_trunkGeo) {
+    _trunkGeo = new THREE.CylinderGeometry(0.12, 0.18, 1.7, 8);
+    _trunkMat = new THREE.MeshStandardMaterial({ color: 0x3a2614, roughness: 1 });
+    _canopyGeo = new THREE.SphereGeometry(1.0, 8, 6);
+    _canopyMat = new THREE.MeshStandardMaterial({ color: 0x3a5a3a, roughness: 1 });
+  }
+  const trunks = new THREE.InstancedMesh(_trunkGeo, _trunkMat!, items.length);
+  const canopies = new THREE.InstancedMesh(_canopyGeo!, _canopyMat!, items.length);
+  trunks.castShadow = canopies.castShadow = shadows;
+  trunks.receiveShadow = canopies.receiveShadow = shadows;
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const t = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  for (let i = 0; i < items.length; i++) {
+    const o = items[i];
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), o.rot);
+    // Trunk: pivot to mid-height (1.7/2 = 0.85)
+    t.set(o.x, 0.85 * o.scale, o.z);
+    s.setScalar(o.scale);
+    m.compose(t, q, s);
+    trunks.setMatrixAt(i, m);
+    // Canopy: vary radius via scale (uses shared sphere of r=1)
+    const cr = (0.7 + ((o.seed >>> 8) & 7) / 10) * o.scale;
+    t.set(o.x, (1.7 * o.scale) + cr * 0.8, o.z);
+    s.set(cr, cr * 0.9, cr);
+    m.compose(t, q, s);
+    canopies.setMatrixAt(i, m);
+  }
+  trunks.instanceMatrix.needsUpdate = true;
+  canopies.instanceMatrix.needsUpdate = true;
+  group.add(trunks); group.add(canopies);
+}
+
+function addInstancedBushes(group: THREE.Group, items: PlacedObject[], shadows: boolean): void {
+  if (!_bushGeo) {
+    _bushGeo = new THREE.SphereGeometry(0.6, 8, 6);
+    _bushMat = new THREE.MeshStandardMaterial({ color: 0x3a5a2a, roughness: 1 });
+  }
+  const bushes = new THREE.InstancedMesh(_bushGeo, _bushMat!, items.length);
+  bushes.castShadow = shadows;
+  bushes.receiveShadow = shadows;
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const t = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  for (let i = 0; i < items.length; i++) {
+    const o = items[i];
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), o.rot);
+    t.set(o.x, 0.5 * o.scale, o.z);
+    s.set(o.scale, 0.7 * o.scale, o.scale);
+    m.compose(t, q, s);
+    bushes.setMatrixAt(i, m);
+  }
+  bushes.instanceMatrix.needsUpdate = true;
+  group.add(bushes);
 }
 
 export function disposeChunk(chunk: LiveChunk, scene: THREE.Scene): void {
