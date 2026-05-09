@@ -15,9 +15,11 @@ import { spawnBurst, tickParticles, disposeParticles } from '../utils/particles'
 import { getProfile } from '../utils/quality';
 import HUD from '../ui/HUD';
 
+import type { HumanoidBones } from '../game/models';
+
 interface ZombieInstance {
   def: ZombieDef;
-  group: THREE.Group;
+  group: THREE.Group & { bones: HumanoidBones };
   hp: number;
   state: 'idle' | 'wander' | 'chase' | 'attack';
   target: THREE.Vector3;
@@ -180,6 +182,7 @@ export default function CityScene() {
     const tmpRay = new THREE.Raycaster();
     let attackTarget: ZombieInstance | null = null;
     let attackCd = 0;
+    let attackSwing = 0; // seconds of remaining attack-arm animation
 
     // Joystick state
     let joystick = { active: false, x: 0, y: 0, baseX: 0, baseY: 0 };
@@ -264,9 +267,6 @@ export default function CityScene() {
     };
     c.addEventListener('pointerdown', onPointerDown);
 
-    // FPS sample buffer for adaptive downgrade
-    let fpsSamples: number[] = [];
-    let lastFpsReport = performance.now();
     const reusableFogColor = new THREE.Color();
 
     // AI throttle
@@ -278,21 +278,47 @@ export default function CityScene() {
     let last = performance.now();
     let raf = 0;
     let stop = false;
+    // Adaptive performance tracker: if FPS stays under 30 for >2s, scale down.
+    let fpsAccum = 0; let fpsFrames = 0; let fpsCheckT = 0;
+    let lowFpsStreak = 0;
+    let degradeLevel = 0; // 0 = normal, 1 = shadows off, 2 = lower zombie cap, 3 = pixel ratio dropped
     function frame() {
       if (stop) return;
       const now = performance.now();
       const dtMs = now - last;
       const dt = Math.min(0.05, dtMs / 1000);
       last = now;
-
-      // FPS sampling
-      fpsSamples.push(1000 / dtMs);
-      if (now - lastFpsReport > 500) {
-        const avg = fpsSamples.reduce((s, v) => s + v, 0) / Math.max(1, fpsSamples.length);
-        useGameStore.getState().reportFps(avg);
-        fpsSamples = [];
-        lastFpsReport = now;
+      // FPS sample
+      fpsAccum += dtMs; fpsFrames += 1;
+      if (now - fpsCheckT > 1000) {
+        const fps = (fpsFrames * 1000) / Math.max(1, fpsAccum);
+        useGameStore.setState({ measuredFps: Math.round(fps) });
+        fpsAccum = 0; fpsFrames = 0; fpsCheckT = now;
+        if (fps < 30) lowFpsStreak += 1; else lowFpsStreak = 0;
+        if (lowFpsStreak >= 2 && degradeLevel < 3) {
+          degradeLevel += 1;
+          lowFpsStreak = 0;
+          if (degradeLevel === 1 && profile.shadows) {
+            renderer.shadowMap.enabled = false;
+          } else if (degradeLevel === 2) {
+            // Halve max zombies — despawn the farthest until we're under cap.
+            const cap = Math.max(6, Math.floor(profile.maxZombies * 0.5));
+            zombies.sort((a, b) =>
+              b.group.position.distanceTo(player.position) - a.group.position.distanceTo(player.position),
+            );
+            while (zombies.length > cap) {
+              const z = zombies.shift()!;
+              scene.remove(z.group); disposeGroup(z.group);
+            }
+            profile.maxZombies = cap;
+          } else if (degradeLevel === 3) {
+            const dpr = Math.min(window.devicePixelRatio, profile.pixelRatioCap) * 0.75;
+            renderer.setPixelRatio(dpr);
+          }
+          useGameStore.getState().setToast(`Auto-quality: stepping down (lv ${degradeLevel})`);
+        }
       }
+
 
       const st = useGameStore.getState();
       st.tickWorld(dt);
@@ -382,6 +408,18 @@ export default function CityScene() {
       if (sprintWanted && movDir > 0.01) useGameStore.getState().modStamina(-12 * dt);
       setPlayerPos(player.position.x, player.position.z);
 
+      // Player walk cycle — alternate legs and arms.
+      const moving = movDir > 0.01;
+      const pPhase = now * 0.012 * (sprintWanted ? 1.5 : 1.0);
+      const pSwing = moving ? Math.sin(pPhase) * 0.6 : 0;
+      const pSwingA = moving ? Math.sin(pPhase + Math.PI) * 0.45 : 0;
+      const pb = player.bones;
+      pb.legL.rotation.x = pSwing;
+      pb.legR.rotation.x = -pSwing;
+      // Right arm is the attack arm — overridden during the swing window below.
+      pb.armL.rotation.x = pSwingA;
+      if (attackSwing <= 0) pb.armR.rotation.x = -pSwingA;
+
       camera.position.set(player.position.x + 20, 30, player.position.z + 20);
       camera.lookAt(player.position.x, 0, player.position.z);
 
@@ -460,10 +498,19 @@ export default function CityScene() {
           z.group.rotation.y = Math.atan2(dir.x, dir.z);
           moving = true;
         }
-        // Walk bob: gently scale Y over time so zombies look alive
-        const bobT = (now + z.uid * 73) * 0.005 * (z.state === 'chase' ? 1.6 : 1.0);
-        z.group.position.y = moving ? Math.abs(Math.sin(bobT)) * 0.07 : 0;
-        z.group.rotation.z = moving ? Math.sin(bobT * 1.3) * 0.04 : 0;
+        // Walk-cycle: alternate legs and arms via the rigged pivot groups.
+        const phase = (now + z.uid * 73) * 0.006 * (z.state === 'chase' ? 1.7 : 1.0);
+        const swing = moving ? Math.sin(phase) * 0.55 : 0;
+        const swingArmL = moving ? Math.sin(phase + Math.PI) * 0.35 : 0;
+        const b = z.group.bones;
+        b.legL.rotation.x = swing;
+        b.legR.rotation.x = -swing;
+        // Zombie arms have a baseline forward rotation (-0.4 / -0.6) — modulate around it.
+        b.armL.rotation.x = -0.4 + swingArmL;
+        b.armR.rotation.x = -0.6 - swingArmL;
+        // Slight torso bob
+        z.group.position.y = moving ? Math.abs(Math.sin(phase)) * 0.04 : 0;
+        z.group.rotation.z = moving ? Math.sin(phase * 1.3) * 0.03 : 0;
         const distToPlayer = z.group.position.distanceTo(player.position);
         if (distToPlayer < 1.4 && z.cooldown <= 0 && z.state === 'chase') {
           useGameStore.getState().damagePlayer(z.def.damage * 0.4);
@@ -476,6 +523,12 @@ export default function CityScene() {
 
       // Player attacks
       attackCd = Math.max(0, attackCd - dt);
+      attackSwing = Math.max(0, attackSwing - dt);
+      if (attackSwing > 0) {
+        // Forward chop on the right arm: 0..1 over the swing window.
+        const t = 1 - attackSwing / 0.35;
+        player.bones.armR.rotation.x = -1.6 * Math.sin(t * Math.PI);
+      }
       const wId = useGameStore.getState().player.equipped.weapon ?? 'fists';
       const w = ITEMS[wId];
       if (attackPressed && attackTarget && attackCd === 0) {
@@ -486,6 +539,7 @@ export default function CityScene() {
           spawnDamage(attackTarget.group.position.clone().add(new THREE.Vector3(0, 1.6, 0)), w.damage ?? 5, '#ffce6a');
           spawnBurst(scene, attackTarget.group.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 10, [0.78, 0.12, 0.12], 3.2);
           attackCd = w.ranged ? 0.4 : 0.7;
+          attackSwing = 0.35;
           if (attackTarget.hp <= 0) {
             for (const lr of attackTarget.def.loot) {
               if (Math.random() < lr.chance) {

@@ -15,32 +15,60 @@ function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Materi
   return m;
 }
 
-/** Survivor — generic player model. Brown jacket, blue jeans, hood. */
-export function buildSurvivor(): THREE.Group {
-  const g = new THREE.Group();
+/** Bones a procedural humanoid exposes for runtime animation. */
+export interface HumanoidBones {
+  legL: THREE.Group; legR: THREE.Group;
+  armL: THREE.Group; armR: THREE.Group;
+  torso: THREE.Mesh;
+  head: THREE.Mesh;
+}
+
+/** Survivor — generic player model with rigged limbs. */
+export function buildSurvivor(): THREE.Group & { bones: HumanoidBones } {
+  const g = new THREE.Group() as THREE.Group & { bones: HumanoidBones };
   const skin = pbrMat(0xd4a07a, 0.9);
   const jacket = pbrMat(0x4a3a2a, 0.95);
   const pants = pbrMat(0x2a3450, 0.9);
   const boots = pbrMat(0x18120c, 0.7);
-  // Legs
-  const legL = box(0.22, 0.7, 0.22, pants);
-  const legR = legL.clone(); legR.material = pants;
-  legL.position.set(-0.13, 0.35, 0); legR.position.set(0.13, 0.35, 0); g.add(legL, legR);
-  const bL = box(0.24, 0.12, 0.28, boots); const bR = bL.clone();
-  bL.position.set(-0.13, 0.06, 0.04); bR.position.set(0.13, 0.06, 0.04); g.add(bL, bR);
+
+  // Legs — wrapped in pivot Groups at hip height so we can rotate around the hip.
+  const legHeight = 0.7;
+  function makeLeg(side: number): THREE.Group {
+    const pivot = new THREE.Group();
+    pivot.position.set(0.13 * side, legHeight, 0);
+    const leg = box(0.22, legHeight, 0.22, pants);
+    leg.position.y = -legHeight / 2;
+    pivot.add(leg);
+    const boot = box(0.24, 0.12, 0.28, boots);
+    boot.position.set(0, -legHeight - 0.0, 0.04);
+    pivot.add(boot);
+    return pivot;
+  }
+  const legL = makeLeg(-1); const legR = makeLeg(1);
+  g.add(legL, legR);
+
   // Torso
   const torso = box(0.55, 0.65, 0.32, jacket); torso.position.y = 1.05; g.add(torso);
-  // Hood
   const hood = box(0.6, 0.18, 0.34, jacket); hood.position.y = 1.45; g.add(hood);
-  // Arms
-  const armL = box(0.16, 0.6, 0.16, jacket); const armR = armL.clone();
-  armL.position.set(-0.38, 1.05, 0); armR.position.set(0.38, 1.05, 0); g.add(armL, armR);
-  // Hands
-  const hL = box(0.14, 0.14, 0.14, skin); const hR = hL.clone();
-  hL.position.set(-0.38, 0.72, 0); hR.position.set(0.38, 0.72, 0); g.add(hL, hR);
+
+  // Arms — also rigged at shoulder pivots.
+  const armHeight = 0.6;
+  function makeArm(side: number): THREE.Group {
+    const pivot = new THREE.Group();
+    pivot.position.set(0.38 * side, 1.35, 0);
+    const arm = box(0.16, armHeight, 0.16, jacket);
+    arm.position.y = -armHeight / 2;
+    pivot.add(arm);
+    const hand = box(0.14, 0.14, 0.14, skin);
+    hand.position.set(0, -armHeight - 0.05, 0);
+    pivot.add(hand);
+    return pivot;
+  }
+  const armL = makeArm(-1); const armR = makeArm(1);
+  g.add(armL, armR);
+
   // Head
   const head = box(0.28, 0.32, 0.28, skin); head.position.y = 1.6; g.add(head);
-  // Eyes
   const eyeMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
   const eL = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.05), eyeMat);
   const eR = eL.clone();
@@ -50,28 +78,52 @@ export function buildSurvivor(): THREE.Group {
   const pack = box(0.4, 0.46, 0.18, pbrMat(0x222018, 0.9));
   pack.position.set(0, 1.05, -0.26);
   g.add(pack);
+
+  g.bones = { legL, legR, armL, armR, torso, head };
   return g;
 }
 
-/** Zombie. Hunched shoulders, dragged arm. */
-export function buildZombie(def: ZombieDef): THREE.Group {
-  const g = new THREE.Group();
+/** Zombie — hunched, with rigged limb pivots. */
+export function buildZombie(def: ZombieDef): THREE.Group & { bones: HumanoidBones } {
+  const g = new THREE.Group() as THREE.Group & { bones: HumanoidBones };
   const skin = pbrMat(def.skin, 0.95);
   const shirt = pbrMat(def.shirt, 1);
   const pants = pbrMat(def.pants, 1);
   const sc = def.scale;
-  const legL = box(0.22 * sc, 0.66 * sc, 0.22 * sc, pants);
-  const legR = legL.clone();
-  legL.position.set(-0.13 * sc, 0.33 * sc, 0); legR.position.set(0.13 * sc, 0.33 * sc, 0); g.add(legL, legR);
+
+  const legHeight = 0.66 * sc;
+  function makeLeg(side: number): THREE.Group {
+    const pivot = new THREE.Group();
+    pivot.position.set(0.13 * sc * side, legHeight, 0);
+    const leg = box(0.22 * sc, legHeight, 0.22 * sc, pants);
+    leg.position.y = -legHeight / 2;
+    pivot.add(leg);
+    return pivot;
+  }
+  const legL = makeLeg(-1); const legR = makeLeg(1);
+  g.add(legL, legR);
+
   const torso = box(0.55 * sc, 0.62 * sc, 0.32 * sc, shirt);
   torso.position.y = 0.66 * sc + 0.31 * sc; torso.rotation.x = 0.18; g.add(torso);
-  const armL = box(0.16 * sc, 0.62 * sc, 0.16 * sc, skin); const armR = armL.clone();
-  armL.position.set(-0.38 * sc, 1.0 * sc, 0.05); armL.rotation.x = -0.4;
-  armR.position.set(0.38 * sc, 1.0 * sc, 0.05); armR.rotation.x = -0.6;
+
+  const armHeight = 0.62 * sc;
+  function makeArm(side: number, baseRot: number): THREE.Group {
+    const pivot = new THREE.Group();
+    pivot.position.set(0.38 * sc * side, 1.3 * sc, 0.05);
+    pivot.rotation.x = baseRot;
+    const arm = box(0.16 * sc, armHeight, 0.16 * sc, skin);
+    arm.position.y = -armHeight / 2;
+    pivot.add(arm);
+    return pivot;
+  }
+  // Hunched-forward base rotations (hands held out, classic zombie pose).
+  const armL = makeArm(-1, -0.4); const armR = makeArm(1, -0.6);
   g.add(armL, armR);
-  const head = box(0.28 * sc, 0.32 * sc, 0.28 * sc, skin); head.position.y = 1.55 * sc; head.rotation.x = 0.15;
+
+  const head = box(0.28 * sc, 0.32 * sc, 0.28 * sc, skin);
+  head.position.y = 1.55 * sc; head.rotation.x = 0.15;
   g.add(head);
-  // glowing eyes
+
   const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3a3a });
   const eL = new THREE.Mesh(new THREE.PlaneGeometry(0.06 * sc, 0.04 * sc), eyeMat);
   const eR = eL.clone();
@@ -85,6 +137,8 @@ export function buildZombie(def: ZombieDef): THREE.Group {
   );
   blood.position.set(0, 1.0 * sc, 0.165 * sc);
   g.add(blood);
+
+  g.bones = { legL, legR, armL, armR, torso, head };
   return g;
 }
 

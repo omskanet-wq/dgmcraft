@@ -106,7 +106,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   buildings: [],
   worldTime: 0.3, // start mid-morning
   dayCount: 1,
-  dayLength: 480, // seconds per full day
+  // Real-time seconds per full day. ~3600 = a full game-day every real hour,
+  // so night falls roughly once an hour (and lasts ~20 real minutes).
+  dayLength: 3600,
   paused: false,
   toast: null,
   quality: detectInitialPreset(),
