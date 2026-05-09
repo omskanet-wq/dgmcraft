@@ -1,0 +1,37 @@
+name: Chronicles CI
+
+on:
+  pull_request:
+    paths:
+      - 'chronicles-of-devil-gods/**'
+      - '.github/workflows/chronicles-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'chronicles-of-devil-gods/**'
+      - '.github/workflows/chronicles-ci.yml'
+
+defaults:
+  run:
+    working-directory: chronicles-of-devil-gods
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: chronicles-of-devil-gods/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chronicles-dist
+          path: chronicles-of-devil-gods/dist
