@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="0.3" cy="0.2" r="1">
+      <stop offset="0" stop-color="#1a1f2c"/>
+      <stop offset="1" stop-color="#0a0a14"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <g fill="#ff7a2a">
+    <path d="M120 380 V180 L256 80 L392 180 V380 H300 V260 H212 V380 Z" stroke="#3a1a0a" stroke-width="10"/>
+  </g>
+  <g fill="#dcd6c4" font-family="sans-serif" font-weight="800" font-size="38" letter-spacing="6">
+    <text x="256" y="448" text-anchor="middle">AFTERFALL</text>
+  </g>
+</svg>
