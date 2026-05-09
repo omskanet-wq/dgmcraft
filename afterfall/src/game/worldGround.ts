@@ -5,7 +5,14 @@ import * as THREE from 'three';
 import { getPbrMaterial } from './textures';
 import type { WorldData } from './world';
 
-export function buildWorldGround(world: WorldData): THREE.Group {
+interface BuildOpts {
+  // Skip the per-dash road-paint meshes on low presets — visually nearly
+  // identical with the asphalt PBR but saves up to ~150 draw calls.
+  paintDashes?: boolean;
+}
+
+export function buildWorldGround(world: WorldData, opts: BuildOpts = {}): THREE.Group {
+  const paintDashes = opts.paintDashes !== false;
   const root = new THREE.Group();
 
   // Big grass plane underneath everything
@@ -34,6 +41,11 @@ export function buildWorldGround(world: WorldData): THREE.Group {
 
   // Roads — long thin asphalt quads
   const roadMat = getPbrMaterial('asphalt', 4);
+  // Single shared paint material + geometry — instanced where dashes are kept.
+  const paintMat = paintDashes
+    ? new THREE.MeshBasicMaterial({ color: 0xe6c84a, transparent: true, opacity: 0.7 })
+    : null;
+  const dashGeom = paintDashes ? new THREE.PlaneGeometry(0.25, 1.6) : null;
   for (const r of world.roads) {
     const dx = r.bx - r.ax;
     const dz = r.bz - r.az;
@@ -46,19 +58,28 @@ export function buildWorldGround(world: WorldData): THREE.Group {
     m.position.set((r.ax + r.bx) / 2, 0.02, (r.az + r.bz) / 2);
     m.receiveShadow = true;
     root.add(m);
-    // Center paint stripe
-    if (r.hasPaint) {
-      const paintMat = new THREE.MeshBasicMaterial({ color: 0xe6c84a, transparent: true, opacity: 0.7 });
+    // Center paint stripe — InstancedMesh batches all dashes for this road
+    // into a single draw call.
+    if (paintDashes && r.hasPaint && paintMat && dashGeom) {
       const dashStride = 4;
-      for (let t = -length / 2 + 1; t < length / 2; t += dashStride) {
-        const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 1.6), paintMat);
-        dash.rotation.x = -Math.PI / 2;
-        dash.rotation.z = -angle + Math.PI / 2;
+      const count = Math.max(0, Math.floor((length - 2) / dashStride));
+      if (count > 0) {
+        const inst = new THREE.InstancedMesh(dashGeom, paintMat, count);
+        const dummy = new THREE.Object3D();
         const cosA = Math.cos(angle), sinA = Math.sin(angle);
-        const px = (r.ax + r.bx) / 2 + sinA * t;
-        const pz = (r.az + r.bz) / 2 + cosA * t;
-        dash.position.set(px, 0.03, pz);
-        root.add(dash);
+        const cx = (r.ax + r.bx) / 2;
+        const cz = (r.az + r.bz) / 2;
+        for (let i = 0; i < count; i++) {
+          const t = -length / 2 + 1 + i * dashStride;
+          const px = cx + sinA * t;
+          const pz = cz + cosA * t;
+          dummy.position.set(px, 0.03, pz);
+          dummy.rotation.set(-Math.PI / 2, 0, -angle + Math.PI / 2);
+          dummy.updateMatrix();
+          inst.setMatrixAt(i, dummy.matrix);
+        }
+        inst.instanceMatrix.needsUpdate = true;
+        root.add(inst);
       }
     }
   }

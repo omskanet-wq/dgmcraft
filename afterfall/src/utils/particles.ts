@@ -79,15 +79,13 @@ export function spawnBurst(
 export function tickParticles(scene: THREE.Scene, dt: number): void {
   const sys = BY_SCENE.get(scene);
   if (!sys) return;
+  let alive = false;
   for (let i = 0; i < POOL; i++) {
-    if (sys.ages[i] <= 0) {
-      // Hide expired particles by snapping them well below ground
-      sys.positions[i * 3 + 1] = -100;
-      continue;
-    }
+    if (sys.ages[i] <= 0) continue;
+    alive = true;
     sys.ages[i] -= dt;
     const o = i * 3;
-    sys.velocities[o + 1] -= 9.8 * dt; // gravity
+    sys.velocities[o + 1] -= 9.8 * dt;
     sys.positions[o] += sys.velocities[o] * dt;
     sys.positions[o + 1] += sys.velocities[o + 1] * dt;
     sys.positions[o + 2] += sys.velocities[o + 2] * dt;
@@ -98,9 +96,16 @@ export function tickParticles(scene: THREE.Scene, dt: number): void {
       sys.velocities[o + 2] *= 0.4;
       sys.ages[i] = Math.min(sys.ages[i], 0.25);
     }
+    if (sys.ages[i] <= 0) {
+      sys.positions[o + 1] = -100;
+    }
   }
-  const geom = sys.points.geometry as THREE.BufferGeometry;
-  (geom.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+  // Skip the GPU upload entirely when nothing is alive — saves bandwidth on
+  // mobile during quiet periods.
+  if (alive) {
+    const geom = sys.points.geometry as THREE.BufferGeometry;
+    (geom.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+  }
 }
 
 export function disposeParticles(scene: THREE.Scene): void {

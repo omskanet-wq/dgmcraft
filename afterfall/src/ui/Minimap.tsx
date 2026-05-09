@@ -63,9 +63,17 @@ export default function Minimap() {
     c.width = SIZE; c.height = SIZE;
     let raf = 0;
     let stop = false;
+    let lastPaint = 0;
     const world = getWorld();
     function frame() {
       if (stop || !ctx) return;
+      // Throttle to ~6Hz — minimap doesn't need 60Hz
+      const now = performance.now();
+      if (now - lastPaint < 160) {
+        raf = requestAnimationFrame(frame);
+        return;
+      }
+      lastPaint = now;
       ctx.clearRect(0, 0, SIZE, SIZE);
       const p = getPlayerPos();
       const px = (p.x / world.size) * SIZE;

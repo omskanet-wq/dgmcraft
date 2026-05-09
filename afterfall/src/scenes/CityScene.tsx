@@ -52,23 +52,56 @@ export default function CityScene() {
     scene.fog = new THREE.FogExp2(0x0a0a14, profile.fogDensity);
 
     const aspect = window.innerWidth / window.innerHeight;
-    const viewSize = 22;
+    let viewSize = 22;
+    const ZOOM_MIN = 12, ZOOM_MAX = 50;
     const camera = new THREE.OrthographicCamera(-viewSize * aspect, viewSize * aspect, viewSize, -viewSize, 0.1, 600);
     camera.position.set(20, 30, 20);
     camera.lookAt(0, 0, 0);
     const target = makeRenderTarget(renderer, scene, camera, profile);
 
-    const onResize = () => {
-      resize();
+    function applyView(): void {
       const a = window.innerWidth / window.innerHeight;
       camera.left = -viewSize * a;
       camera.right = viewSize * a;
       camera.top = viewSize;
       camera.bottom = -viewSize;
       camera.updateProjectionMatrix();
+    }
+    const onResize = () => {
+      resize();
+      applyView();
       target.setSize(window.innerWidth, window.innerHeight);
     };
     window.addEventListener('resize', onResize);
+
+    // Mouse wheel zoom
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = Math.sign(e.deltaY);
+      viewSize = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, viewSize + delta * 2));
+      applyView();
+    };
+    c.addEventListener('wheel', onWheel, { passive: false });
+
+    // Pinch zoom on touch
+    let pinchStart = 0;
+    let pinchView = viewSize;
+    const onTouchMoveZoom = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const d = Math.hypot(dx, dy);
+      if (pinchStart === 0) { pinchStart = d; pinchView = viewSize; return; }
+      const ratio = pinchStart / d;
+      viewSize = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pinchView * ratio));
+      applyView();
+    };
+    const onTouchEndZoom = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinchStart = 0;
+    };
+    c.addEventListener('touchmove', onTouchMoveZoom, { passive: true });
+    c.addEventListener('touchend', onTouchEndZoom);
+    c.addEventListener('touchcancel', onTouchEndZoom);
 
     // Lights
     const hemi = new THREE.HemisphereLight(0xa8c0e0, 0x202018, 0.7 * profile.hemiIntensityMul);
@@ -84,6 +117,10 @@ export default function CityScene() {
       sun.shadow.camera.bottom = -50;
       sun.shadow.camera.near = 1;
       sun.shadow.camera.far = 200;
+      // Manually-triggered shadow updates (every ~250ms) instead of every
+      // frame. Big GPU saver on integrated GPUs / mobile.
+      renderer.shadowMap.autoUpdate = false;
+      renderer.shadowMap.needsUpdate = true;
     }
     scene.add(sun);
     const moon = new THREE.DirectionalLight(0x8aaeff, 0.0);
@@ -92,7 +129,7 @@ export default function CityScene() {
 
     // World data + ground + chunks
     const world = getWorld(7);
-    const groundGroup = buildWorldGround(world);
+    const groundGroup = buildWorldGround(world, { paintDashes: profile.preset !== 'low' });
     scene.add(groundGroup);
     const chunkMgr = makeChunkManager(world, scene, {
       streamRadius: profile.cityChunkRadius,
@@ -230,11 +267,13 @@ export default function CityScene() {
     // FPS sample buffer for adaptive downgrade
     let fpsSamples: number[] = [];
     let lastFpsReport = performance.now();
+    const reusableFogColor = new THREE.Color();
 
     // AI throttle
     const aiInterval = 1000 / profile.aiTickHz;
     let aiAccum = 0;
     let lastChunkUpdate = 0;
+    let lastEmissiveTick = 0;
 
     let last = performance.now();
     let raf = 0;
@@ -265,22 +304,32 @@ export default function CityScene() {
       sun.intensity = 1.6 * bright;
       sun.color.setHSL(0.08 + (1 - bright) * 0.04, 0.4, 0.55 + bright * 0.2);
       moon.intensity = (1 - bright) * 0.35;
-      const fogColor = new THREE.Color().setRGB(
+      // Reuse a single Color instance for fog/background to skip per-frame
+      // allocations (was a top GC offender on low-end devices).
+      reusableFogColor.setRGB(
         0.04 + bright * 0.34,
         0.04 + bright * 0.32,
         0.07 + bright * 0.28,
       );
-      scene.background = fogColor;
-      (scene.fog as THREE.FogExp2).color = fogColor;
+      (scene.background as THREE.Color).copy(reusableFogColor);
+      (scene.fog as THREE.FogExp2).color.copy(reusableFogColor);
       (scene.fog as THREE.FogExp2).density = profile.fogDensity * (1 + (1 - bright) * 0.6);
 
-      // Lamp / window emissives
-      chunkMgr.forEachLight((lf) => {
-        lf.t += dt * (0.5 + Math.random() * 5);
-        const flicker = night ? 0.85 + Math.sin(lf.t) * 0.08 + (Math.random() - 0.5) * 0.05 : 0;
-        lf.light.intensity = lf.base * flicker;
-      });
-      if (!profile.windowEmissivePerformance) {
+      // Lamps: only animate flicker at night; off entirely during day.
+      if (night) {
+        chunkMgr.forEachLight((lf) => {
+          lf.t += dt * 3;
+          lf.light.intensity = lf.base * (0.85 + Math.sin(lf.t) * 0.08);
+        });
+      } else {
+        chunkMgr.forEachLight((lf) => {
+          if (lf.light.intensity !== 0) lf.light.intensity = 0;
+        });
+      }
+      // Window emissives: toggle at most every 250ms — visually identical,
+      // dramatic CPU saver on the chunked window meshes.
+      if (!profile.windowEmissivePerformance && now - lastEmissiveTick > 250) {
+        lastEmissiveTick = now;
         chunkMgr.forEachEmissive((m) => {
           const mat = m.material as THREE.MeshStandardMaterial;
           if (mat.emissiveIntensity !== undefined) {
@@ -295,6 +344,7 @@ export default function CityScene() {
       if (now - lastChunkUpdate > 250) {
         chunkMgr.update(player.position.x, player.position.z);
         lastChunkUpdate = now;
+        if (profile.shadows) renderer.shadowMap.needsUpdate = true;
       }
 
       // Movement (sprint with Shift drains stamina)
@@ -514,6 +564,10 @@ export default function CityScene() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       c.removeEventListener('pointerdown', onPointerDown);
+      c.removeEventListener('wheel', onWheel);
+      c.removeEventListener('touchmove', onTouchMoveZoom);
+      c.removeEventListener('touchend', onTouchEndZoom);
+      c.removeEventListener('touchcancel', onTouchEndZoom);
       stickZone.remove();
       chunkMgr.dispose();
       disposeParticles(scene);
