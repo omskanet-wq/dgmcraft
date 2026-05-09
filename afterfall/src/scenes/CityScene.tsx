@@ -402,12 +402,18 @@ export default function CityScene() {
       for (const z of zombies) {
         const dir = tmpVec.subVectors(z.target, z.group.position).setY(0);
         const len = dir.length();
+        let moving = false;
         if (len > 0.05) {
           dir.normalize();
           const sp = (z.state === 'chase' ? z.def.speed * (night ? 1.2 : 1) : z.def.speed * 0.4);
           z.group.position.addScaledVector(dir, sp * dt);
           z.group.rotation.y = Math.atan2(dir.x, dir.z);
+          moving = true;
         }
+        // Walk bob: gently scale Y over time so zombies look alive
+        const bobT = (now + z.uid * 73) * 0.005 * (z.state === 'chase' ? 1.6 : 1.0);
+        z.group.position.y = moving ? Math.abs(Math.sin(bobT)) * 0.07 : 0;
+        z.group.rotation.z = moving ? Math.sin(bobT * 1.3) * 0.04 : 0;
         const distToPlayer = z.group.position.distanceTo(player.position);
         if (distToPlayer < 1.4 && z.cooldown <= 0 && z.state === 'chase') {
           useGameStore.getState().damagePlayer(z.def.damage * 0.4);
@@ -441,6 +447,7 @@ export default function CityScene() {
               }
             }
             useGameStore.getState().gainXP(attackTarget.def.xp);
+            useGameStore.getState().addKill();
             scene.remove(attackTarget.group);
             disposeGroup(attackTarget.group);
             const idx = zombies.indexOf(attackTarget);

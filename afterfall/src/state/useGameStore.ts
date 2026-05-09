@@ -73,6 +73,11 @@ interface GameState {
   tickWorld: (dt: number) => void;
 
   setToast: (msg: string | null) => void;
+
+  kills: number;
+  loot: number;
+  addKill: () => void;
+  addLoot: (n?: number) => void;
 }
 
 let buildingUid = 1;
@@ -106,6 +111,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   toast: null,
   quality: detectInitialPreset(),
   measuredFps: 60,
+  kills: 0,
+  loot: 0,
+  addKill: () => set((st) => ({ kills: st.kills + 1 })),
+  addLoot: (n = 1) => set((st) => ({ loot: st.loot + n })),
 
   setScreen: (s) => set({ screen: s, paused: false }),
   setPaused: (p) => set({ paused: p }),
@@ -267,6 +276,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     let wt = st.worldTime + dt / st.dayLength;
     let dc = st.dayCount;
     if (wt >= 1) { wt -= 1; dc += 1; }
+    const wasNight = isNight(st.worldTime);
+    const nowNight = isNight(wt);
+    if (wasNight !== nowNight) {
+      set({ toast: nowNight ? `Night falls — they wake up.` : `Dawn breaks — push out.` });
+    }
     set({ worldTime: wt, dayCount: dc });
     // Construction completion
     const now = performance.now();

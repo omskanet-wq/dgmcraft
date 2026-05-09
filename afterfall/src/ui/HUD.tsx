@@ -53,12 +53,13 @@ export default function HUD() {
         {screen === 'city' && <Minimap />}
       </div>
 
-      {/* Top-center: level + XP */}
+      {/* Top-center: level + XP + counters */}
       <div className="level-bar">
         <span className="lvl-num">LV {player.level}</span>
         <div className="xp-bar">
           <div className="xp-fill" style={{ width: `${(player.xp / (player.level * 100)) * 100}%` }} />
         </div>
+        <span className="counter">☠ {useGameStore.getState().kills}</span>
       </div>
 
       {/* Bottom: hotbar */}
