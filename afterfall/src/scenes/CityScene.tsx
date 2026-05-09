@@ -7,6 +7,7 @@ import { buildWorldGround } from '../game/worldGround';
 import { makeChunkManager, type LiveContainer } from '../game/chunks';
 import { rollContainerLoot } from '../game/loot';
 import { buildSurvivor, buildZombie } from '../game/models';
+import { loadCharacterTemplate, spawnCharacterInstance, type SkinnedInstance } from '../game/skinnedChar';
 import { ZOMBIES, type ZombieDef } from '../game/zombies';
 import { ITEMS, RARITY_COLOR } from '../game/items';
 import { makeRenderer, makeRenderTarget } from '../utils/post';
@@ -139,12 +140,39 @@ export default function CityScene() {
       trees: profile.trees,
     });
 
-    // Player
+    // Player — procedural visual is the immediate fallback. A higher-fidelity
+    // skinned model loads asynchronously on medium/high; once it arrives we
+    // hide the proc visual and drive the SkinnedMesh via AnimationMixer.
     const player = buildSurvivor();
     const playerSpawn = new THREE.Vector3(world.spawnPoint.x, 0, world.spawnPoint.z);
     player.position.copy(playerSpawn);
     scene.add(player);
     chunkMgr.update(player.position.x, player.position.z);
+
+    let playerSkin: SkinnedInstance | null = null;
+    let prevPlayerPosX = playerSpawn.x;
+    let prevPlayerPosZ = playerSpawn.z;
+    if (profile.preset !== 'low') {
+      loadCharacterTemplate()
+        .then((template) => {
+          playerSkin = spawnCharacterInstance(template);
+          // Mixamo soldier is roughly 1.6m tall — fits our 1.7m proc survivor.
+          playerSkin.group.position.y = 0;
+          // Hide all the procedural visuals; keep the parent Group at the
+          // same transform so the camera follow & flashlight still work.
+          for (const c of player.children.slice()) {
+            // Only hide visuals we created in buildSurvivor; the flashlight
+            // attached later is added after this point so isn't a child yet.
+            const cm = c as THREE.Object3D & { isLight?: boolean };
+            if (!cm.isLight) c.visible = false;
+          }
+          player.add(playerSkin.group);
+        })
+        .catch((err) => {
+          // Stay on procedural — log once.
+          console.warn('Soldier.glb failed to load, staying on procedural model', err);
+        });
+    }
 
     const flashlight = new THREE.SpotLight(0xfff4cc, 0, 16, Math.PI / 7, 0.4, 1.5);
     flashlight.position.set(0, 2.5, 0);
@@ -408,17 +436,28 @@ export default function CityScene() {
       if (sprintWanted && movDir > 0.01) useGameStore.getState().modStamina(-12 * dt);
       setPlayerPos(player.position.x, player.position.z);
 
-      // Player walk cycle — alternate legs and arms.
-      const moving = movDir > 0.01;
-      const pPhase = now * 0.012 * (sprintWanted ? 1.5 : 1.0);
-      const pSwing = moving ? Math.sin(pPhase) * 0.6 : 0;
-      const pSwingA = moving ? Math.sin(pPhase + Math.PI) * 0.45 : 0;
-      const pb = player.bones;
-      pb.legL.rotation.x = pSwing;
-      pb.legR.rotation.x = -pSwing;
-      // Right arm is the attack arm — overridden during the swing window below.
-      pb.armL.rotation.x = pSwingA;
-      if (attackSwing <= 0) pb.armR.rotation.x = -pSwingA;
+      // Animation update path differs depending on whether the high-fidelity
+      // skinned model has finished loading.
+      if (playerSkin) {
+        const dxp = player.position.x - prevPlayerPosX;
+        const dzp = player.position.z - prevPlayerPosZ;
+        const speedNow = Math.hypot(dxp, dzp) / Math.max(0.001, dt);
+        playerSkin.setMotion(speedNow);
+        playerSkin.mixer.update(dt);
+        prevPlayerPosX = player.position.x;
+        prevPlayerPosZ = player.position.z;
+      } else {
+        // Procedural walk cycle — alternate legs and arms.
+        const moving = movDir > 0.01;
+        const pPhase = now * 0.012 * (sprintWanted ? 1.5 : 1.0);
+        const pSwing = moving ? Math.sin(pPhase) * 0.6 : 0;
+        const pSwingA = moving ? Math.sin(pPhase + Math.PI) * 0.45 : 0;
+        const pb = player.bones;
+        pb.legL.rotation.x = pSwing;
+        pb.legR.rotation.x = -pSwing;
+        pb.armL.rotation.x = pSwingA;
+        if (attackSwing <= 0) pb.armR.rotation.x = -pSwingA;
+      }
 
       camera.position.set(player.position.x + 20, 30, player.position.z + 20);
       camera.lookAt(player.position.x, 0, player.position.z);
@@ -524,8 +563,8 @@ export default function CityScene() {
       // Player attacks
       attackCd = Math.max(0, attackCd - dt);
       attackSwing = Math.max(0, attackSwing - dt);
-      if (attackSwing > 0) {
-        // Forward chop on the right arm: 0..1 over the swing window.
+      if (attackSwing > 0 && !playerSkin) {
+        // Forward chop on the procedural right arm during the swing window.
         const t = 1 - attackSwing / 0.35;
         player.bones.armR.rotation.x = -1.6 * Math.sin(t * Math.PI);
       }
