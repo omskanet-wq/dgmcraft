@@ -93,6 +93,94 @@ export function spawnCharacterInstance(template: CharacterTemplate): SkinnedInst
   return { group: cloned, mixer, actions: { idle, walk, run }, setMotion, dispose };
 }
 
+// --- Quaternius CC0 zombie (Zombie Apocalypse Kit) ----------------------------
+// Separate template so the zombie's animation indices can differ from the
+// player's. The skeleton has 50 joints and 16 baked animations.
+let zombieP: Promise<CharacterTemplate> | null = null;
+export function loadZombieTemplate(): Promise<CharacterTemplate> {
+  if (zombieP) return zombieP;
+  const loader = new GLTFLoader();
+  zombieP = new Promise((resolve, reject) => {
+    loader.load(
+      'models/Zombie_Basic.glb',
+      (gltf) => {
+        const scene = gltf.scene;
+        scene.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh) {
+            m.castShadow = true;
+            m.receiveShadow = true;
+            const mat = m.material as THREE.MeshStandardMaterial;
+            if (mat && mat.isMeshStandardMaterial) {
+              mat.envMapIntensity = 0.9;
+              mat.roughness = Math.max(0.7, mat.roughness ?? 1);
+            }
+          }
+        });
+        resolve({ scene, animations: gltf.animations });
+      },
+      undefined,
+      reject,
+    );
+  });
+  return zombieP;
+}
+
+export interface ZombieSkinInstance {
+  group: THREE.Group;
+  mixer: THREE.AnimationMixer;
+  setMotion(speed: number): void;
+  playHit(): void;
+  playPunch(): void;
+  playDeath(): void;
+  dispose(): void;
+}
+
+// Verified animation index mapping for Zombie_Basic.glb:
+//   1=Death, 2=HitReact, 3=Idle, 9=Punch, 10=Run, 13=Walk
+const Z_ANIM = { idle: 3, walk: 13, run: 10, hit: 2, punch: 9, death: 1 };
+
+export function spawnZombieSkinInstance(template: CharacterTemplate): ZombieSkinInstance {
+  const cloned = SkeletonUtils.clone(template.scene) as THREE.Group;
+  // Quaternius models ship at ~1.0 unit tall but our world uses ~1.7 player.
+  cloned.scale.set(1.05, 1.05, 1.05);
+  const mixer = new THREE.AnimationMixer(cloned);
+  const idle = mixer.clipAction(template.animations[Z_ANIM.idle]);
+  const walk = mixer.clipAction(template.animations[Z_ANIM.walk]);
+  const run = mixer.clipAction(template.animations[Z_ANIM.run]);
+  const hit = mixer.clipAction(template.animations[Z_ANIM.hit]);
+  const punch = mixer.clipAction(template.animations[Z_ANIM.punch]);
+  const death = mixer.clipAction(template.animations[Z_ANIM.death]);
+  hit.setLoop(THREE.LoopOnce, 1); hit.clampWhenFinished = false;
+  punch.setLoop(THREE.LoopOnce, 1); punch.clampWhenFinished = false;
+  death.setLoop(THREE.LoopOnce, 1); death.clampWhenFinished = true;
+  idle.play(); walk.play(); run.play();
+  idle.weight = 1; walk.weight = 0; run.weight = 0;
+
+  function setMotion(speed: number): void {
+    if (speed < 0.05) {
+      idle.weight = 1; walk.weight = 0; run.weight = 0;
+    } else if (speed < 2.5) {
+      const t = Math.min(1, speed / 2.5);
+      idle.weight = 1 - t; walk.weight = t; run.weight = 0;
+    } else {
+      const t = Math.min(1, (speed - 2) / 3);
+      idle.weight = 0; walk.weight = 1 - t; run.weight = t;
+    }
+  }
+  function playHit(): void { hit.reset().play(); }
+  function playPunch(): void { punch.reset().play(); }
+  function playDeath(): void { death.reset().play(); }
+  function dispose(): void {
+    mixer.stopAllAction();
+    cloned.traverse((o) => {
+      const sm = o as THREE.SkinnedMesh;
+      if (sm.isSkinnedMesh) sm.skeleton.dispose();
+    });
+  }
+  return { group: cloned, mixer, setMotion, playHit, playPunch, playDeath, dispose };
+}
+
 /** Re-tint a cloned instance for zombies. Mutates materials on the clone. */
 export function tintZombie(instance: SkinnedInstance, opts: { skin: number; shirt: number }): void {
   // The Soldier model has a single combined material. Clone it on this

@@ -1,6 +1,6 @@
 // Afterfall service worker. Network-first for the entry HTML so the user
 // always gets the latest build, cache-first for everything else.
-const CACHE_NAME = 'afterfall-v2';
+const CACHE_NAME = 'afterfall-v3';
 const PRECACHE = ['./', './index.html', './manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

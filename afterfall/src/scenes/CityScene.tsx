@@ -7,7 +7,10 @@ import { buildWorldGround } from '../game/worldGround';
 import { makeChunkManager, type LiveContainer } from '../game/chunks';
 import { rollContainerLoot } from '../game/loot';
 import { buildSurvivor, buildZombie } from '../game/models';
-import { loadCharacterTemplate, spawnCharacterInstance, type SkinnedInstance } from '../game/skinnedChar';
+import {
+  loadCharacterTemplate, spawnCharacterInstance, type SkinnedInstance,
+  loadZombieTemplate, spawnZombieSkinInstance, type ZombieSkinInstance,
+} from '../game/skinnedChar';
 import { ZOMBIES, type ZombieDef } from '../game/zombies';
 import { ITEMS, RARITY_COLOR } from '../game/items';
 import { makeRenderer, makeRenderTarget } from '../utils/post';
@@ -35,6 +38,10 @@ interface ZombieInstance {
   knockX: number;
   knockZ: number;
   flinchT: number;
+  // Optional skinned visual (HIGH preset only, capped count).
+  skin?: ZombieSkinInstance;
+  prevX?: number;
+  prevZ?: number;
 }
 
 interface Projectile {
@@ -215,10 +222,47 @@ export default function CityScene() {
         knockX: 0, knockZ: 0, flinchT: 0,
       };
       zombies.push(zi);
+      // If the high-fidelity zombie template has already loaded, attach now.
+      if (zombieTemplate) attachSkinTo(zi);
       return zi;
     }
     for (let i = 0; i < Math.min(profile.maxZombies / 2, 12); i++) spawnZombieNear(playerSpawn, ZOMBIES.walker);
     for (let i = 0; i < Math.min(profile.maxZombies / 4, 4); i++) spawnZombieNear(playerSpawn, ZOMBIES.runner);
+
+    // Quaternius Zombie_Basic.glb — skinned visual, only on HIGH preset and
+    // capped at MAX_SKIN_ZOMBIES so 50-bone skeleton updates stay affordable.
+    const MAX_SKIN_ZOMBIES = 8;
+    let zombieTemplate: Awaited<ReturnType<typeof loadZombieTemplate>> | null = null;
+    function attachSkinTo(z: ZombieInstance): void {
+      if (!zombieTemplate || z.skin) return;
+      if (zombies.filter((zz) => zz.skin).length >= MAX_SKIN_ZOMBIES) return;
+      const skin = spawnZombieSkinInstance(zombieTemplate);
+      // Quaternius zombies have a forward-Z that matches our convention.
+      // Tint by zombie type so walkers/runners still look distinct.
+      const tint = z.def === ZOMBIES.runner ? 0x8a3a3a : 0x6a7a4a;
+      skin.group.traverse((o) => {
+        const m = o as THREE.SkinnedMesh;
+        if (m.isSkinnedMesh) {
+          const mat = (m.material as THREE.MeshStandardMaterial).clone();
+          if (mat.color && mat.color.r > 0.5 && mat.color.g > 0.4) mat.color.setHex(tint);
+          mat.emissive = new THREE.Color(0x080000);
+          mat.emissiveIntensity = 0.1;
+          m.material = mat;
+        }
+      });
+      // Hide procedural visual children, keep parent for transforms.
+      for (const c of z.group.children.slice()) c.visible = false;
+      z.group.add(skin.group);
+      z.skin = skin;
+    }
+    if (profile.preset === 'high') {
+      loadZombieTemplate()
+        .then((tpl) => {
+          zombieTemplate = tpl;
+          for (const z of zombies) attachSkinTo(z);
+        })
+        .catch((err) => console.warn('Zombie_Basic.glb failed to load', err));
+    }
 
     // Targeting
     const moveTarget = playerSpawn.clone();
@@ -372,6 +416,7 @@ export default function CityScene() {
             );
             while (zombies.length > cap) {
               const z = zombies.shift()!;
+              z.skin?.dispose();
               scene.remove(z.group); disposeGroup(z.group);
             }
             profile.maxZombies = cap;
@@ -553,6 +598,7 @@ export default function CityScene() {
           const distToPlayer = z.group.position.distanceTo(player.position);
           // Despawn very-far zombies (likely walked into a different district)
           if (distToPlayer > 80) {
+            z.skin?.dispose();
             scene.remove(z.group);
             disposeGroup(z.group);
             zombies.splice(i, 1);
@@ -602,34 +648,46 @@ export default function CityScene() {
           z.group.rotation.y = Math.atan2(dir.x, dir.z);
           moving = true;
         }
-        // Walk-cycle: alternate legs and arms via the rigged pivot groups.
-        const phase = (now + z.uid * 73) * 0.006 * (z.state === 'chase' ? 1.7 : 1.0);
-        const swing = moving ? Math.sin(phase) * 0.55 : 0;
-        const swingArmL = moving ? Math.sin(phase + Math.PI) * 0.35 : 0;
-        const b = z.group.bones;
-        if (flinching) {
-          // Flinch pose — head and torso jerk back, arms fling out.
-          const ft = z.flinchT / 0.25;
-          b.torso.rotation.x = -0.4 * ft;
-          b.head.rotation.x = -0.6 * ft;
-          b.armL.rotation.x = -1.2;
-          b.armR.rotation.x = -1.2;
-          b.legL.rotation.x = 0;
-          b.legR.rotation.x = 0;
+        if (z.skin) {
+          // Skinned-mesh path: drive AnimationMixer from ground-plane speed.
+          const dxz = z.group.position.x - (z.prevX ?? z.group.position.x);
+          const dzz = z.group.position.z - (z.prevZ ?? z.group.position.z);
+          const sp = Math.hypot(dxz, dzz) / Math.max(0.001, dt);
+          z.skin.setMotion(sp);
+          z.skin.mixer.update(dt);
+          z.prevX = z.group.position.x; z.prevZ = z.group.position.z;
+          z.group.position.y = 0;
+          z.group.rotation.z = 0;
         } else {
-          b.torso.rotation.x = 0;
-          b.head.rotation.x = 0;
-          b.legL.rotation.x = swing;
-          b.legR.rotation.x = -swing;
-          b.armL.rotation.x = -0.4 + swingArmL;
-          b.armR.rotation.x = -0.6 - swingArmL;
+          // Procedural walk-cycle: alternate legs and arms via the rigged pivot groups.
+          const phase = (now + z.uid * 73) * 0.006 * (z.state === 'chase' ? 1.7 : 1.0);
+          const swing = moving ? Math.sin(phase) * 0.55 : 0;
+          const swingArmL = moving ? Math.sin(phase + Math.PI) * 0.35 : 0;
+          const b = z.group.bones;
+          if (flinching) {
+            const ft = z.flinchT / 0.25;
+            b.torso.rotation.x = -0.4 * ft;
+            b.head.rotation.x = -0.6 * ft;
+            b.armL.rotation.x = -1.2;
+            b.armR.rotation.x = -1.2;
+            b.legL.rotation.x = 0;
+            b.legR.rotation.x = 0;
+          } else {
+            b.torso.rotation.x = 0;
+            b.head.rotation.x = 0;
+            b.legL.rotation.x = swing;
+            b.legR.rotation.x = -swing;
+            b.armL.rotation.x = -0.4 + swingArmL;
+            b.armR.rotation.x = -0.6 - swingArmL;
+          }
+          z.group.position.y = moving ? Math.abs(Math.sin(phase)) * 0.04 : 0;
+          z.group.rotation.z = moving && !flinching ? Math.sin(phase * 1.3) * 0.03 : 0;
         }
-        z.group.position.y = moving ? Math.abs(Math.sin(phase)) * 0.04 : 0;
-        z.group.rotation.z = moving && !flinching ? Math.sin(phase * 1.3) * 0.03 : 0;
         // Stochastic moan: ~one zombie per second total starts a 0.7s groan.
         if (Math.random() < dt * 0.5 / zombies.length && z.state === 'chase') sfxZombieGroan();
         const distToPlayer = z.group.position.distanceTo(player.position);
         if (distToPlayer < 1.4 && z.cooldown <= 0 && z.state === 'chase' && !flinching) {
+          z.skin?.playPunch();
           useGameStore.getState().damagePlayer(z.def.damage * 0.4);
           spawnDamage(player.position.clone().add(new THREE.Vector3(0, 1.5, 0)), z.def.damage * 0.4, '#ff6a6a');
           spawnBurst(scene, player.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 6, [0.85, 0.18, 0.18], 2.4);
@@ -728,6 +786,7 @@ export default function CityScene() {
       function applyHit(z: ZombieInstance, damage: number, kx: number, kz: number): void {
         z.hp -= damage;
         z.knockX += kx; z.knockZ += kz;
+        z.skin?.playHit();
         z.flinchT = 0.25;
         spawnDamage(z.group.position.clone().add(new THREE.Vector3(0, 1.6, 0)), damage, '#ffce6a');
         spawnBurst(scene, z.group.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 10, [0.78, 0.12, 0.12], 3.2);
@@ -746,6 +805,7 @@ export default function CityScene() {
           }
           useGameStore.getState().gainXP(z.def.xp);
           useGameStore.getState().addKill();
+          z.skin?.dispose();
           scene.remove(z.group);
           disposeGroup(z.group);
           const idx = zombies.indexOf(z);
