@@ -1,28 +1,25 @@
-# Third-party assets
+# CC0 1.0 Public Domain — texture credits
 
-Every asset under `public/cc0/` is licensed under **CC0 1.0 (Public Domain
-Dedication)** — no attribution required, free for any use including commercial.
-Sources are listed below as a courtesy.
+All textures in this directory are released under the Creative Commons CC0 1.0
+Universal Public Domain Dedication (https://creativecommons.org/publicdomain/zero/1.0/).
+You are free to use, modify and redistribute them for any purpose, including
+commercially, with or without attribution.
 
-## Textures (sourced from ambientCG, CC0)
+The following sources are gratefully credited (attribution not legally required):
 
-All maps were downloaded from <https://ambientcg.com>, downscaled to 512×512
-and re-encoded as JPEG q=75 to keep the bundle small. We use only Color,
-NormalGL, Roughness and (where present) Metalness channels.
+| Slug      | Source       | Asset                         |
+|-----------|--------------|-------------------------------|
+| asphalt   | Poly Haven   | aerial_asphalt_01             |
+| bricks    | Poly Haven   | red_brick_03                  |
+| concrete  | Poly Haven   | painted_concrete              |
+| metal     | Poly Haven   | metal_plate                   |
+| ground    | Poly Haven   | rocky_terrain_02              |
+| grass     | Poly Haven   | aerial_grass_rock             |
+| rust      | Poly Haven   | rust_coarse_01                |
+| wood      | Poly Haven   | wood_planks_grey              |
 
-| Slug | Source asset |
-| --- | --- |
-| `asphalt`  | Asphalt026A   |
-| `bricks`   | Bricks075A    |
-| `concrete` | Concrete033   |
-| `metal`    | MetalPlates006|
-| `ground`   | Ground037     |
-| `grass`    | Grass001      |
-| `rust`     | Rust004       |
-| `wood`     | WoodFloor043  |
+Original 1K JPGs were resized to 768×768 (color) and 512×512 (normal/roughness)
+at conservative quality settings to keep the bundle small for mobile users.
 
-## Procedural assets
-
-Everything else (3D models, UI iconography, sound effects) is generated at
-runtime from primitives in `src/game/models.ts` and `src/game/textures.ts`.
-No third-party model meshes or animations are used.
+Sources:
+- https://polyhaven.com/textures (CC0)

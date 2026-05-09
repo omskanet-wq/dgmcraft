@@ -25,8 +25,10 @@ function loadTex(url: string, srgb: boolean): THREE.Texture {
 export type Cc0Slug =
   | 'asphalt' | 'bricks' | 'concrete' | 'metal' | 'ground' | 'grass' | 'rust' | 'wood';
 
-const SLUG_HAS_METALNESS: Record<Cc0Slug, boolean> = {
-  asphalt: false, bricks: false, concrete: false, metal: true, ground: false, grass: false, rust: true, wood: false,
+// Scalar metalness when no metalness map is provided. Poly Haven 1K sets we
+// ship don't include packed metalness, so metallic surfaces use a constant.
+const METALNESS_SCALAR: Record<Cc0Slug, number> = {
+  asphalt: 0, bricks: 0, concrete: 0, metal: 0.85, ground: 0, grass: 0, rust: 0.5, wood: 0,
 };
 
 export function loadCc0(slug: Cc0Slug): PbrSet {
@@ -37,7 +39,6 @@ export function loadCc0(slug: Cc0Slug): PbrSet {
     normal: loadTex(`${base}_normalgl.jpg`, false),
     roughness: loadTex(`${base}_roughness.jpg`, false),
   };
-  if (SLUG_HAS_METALNESS[slug]) set.metalness = loadTex(`${base}_metalness.jpg`, false);
   cache.set(slug, set);
   return set;
 }
@@ -48,8 +49,7 @@ export function pbrMaterial(slug: Cc0Slug, repeat = 1, opts: Partial<THREE.MeshS
     map: set.color,
     normalMap: set.normal,
     roughnessMap: set.roughness,
-    metalnessMap: set.metalness,
-    metalness: set.metalness ? 1.0 : 0.0,
+    metalness: METALNESS_SCALAR[slug],
     roughness: 1.0,
     ...opts,
   });
