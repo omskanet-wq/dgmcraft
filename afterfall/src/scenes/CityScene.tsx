@@ -11,6 +11,7 @@ import { ZOMBIES, type ZombieDef } from '../game/zombies';
 import { ITEMS, RARITY_COLOR } from '../game/items';
 import { makeRenderer, makeRenderTarget } from '../utils/post';
 import { spawnDamage, spawnPickup, tickHud } from '../utils/hud';
+import { spawnBurst, tickParticles, disposeParticles } from '../utils/particles';
 import { getProfile } from '../utils/quality';
 import HUD from '../ui/HUD';
 
@@ -411,6 +412,7 @@ export default function CityScene() {
         if (distToPlayer < 1.4 && z.cooldown <= 0 && z.state === 'chase') {
           useGameStore.getState().damagePlayer(z.def.damage * 0.4);
           spawnDamage(player.position.clone().add(new THREE.Vector3(0, 1.5, 0)), z.def.damage * 0.4, '#ff6a6a');
+          spawnBurst(scene, player.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 6, [0.85, 0.18, 0.18], 2.4);
           z.cooldown = 1.0;
           void aggroBoost;
         }
@@ -426,6 +428,7 @@ export default function CityScene() {
         if (dToTarget <= reach) {
           attackTarget.hp -= w.damage ?? 5;
           spawnDamage(attackTarget.group.position.clone().add(new THREE.Vector3(0, 1.6, 0)), w.damage ?? 5, '#ffce6a');
+          spawnBurst(scene, attackTarget.group.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 10, [0.78, 0.12, 0.12], 3.2);
           attackCd = w.ranged ? 0.4 : 0.7;
           if (attackTarget.hp <= 0) {
             for (const lr of attackTarget.def.loot) {
@@ -454,6 +457,7 @@ export default function CityScene() {
       }
 
       tickHud(camera, dt);
+      tickParticles(scene, dt);
       target.render();
       raf = requestAnimationFrame(frame);
     }
@@ -505,6 +509,7 @@ export default function CityScene() {
       c.removeEventListener('pointerdown', onPointerDown);
       stickZone.remove();
       chunkMgr.dispose();
+      disposeParticles(scene);
       target.dispose();
       renderer.dispose();
     };
