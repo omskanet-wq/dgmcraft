@@ -8,7 +8,7 @@ import type { QualityProfile } from './quality';
 export function makeRenderer(canvas: HTMLCanvasElement, profile: QualityProfile): THREE.WebGLRenderer {
   const r = new THREE.WebGLRenderer({
     canvas,
-    antialias: profile.preset !== 'low',
+    antialias: profile.preset === 'high',
     powerPreference: 'high-performance',
     stencil: false,
     depth: true,

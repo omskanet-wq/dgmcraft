@@ -24,53 +24,53 @@ export interface QualityProfile {
 const PROFILES: Record<QualityPreset, QualityProfile> = {
   low: {
     preset: 'low',
-    pixelRatioCap: 1.0,
+    pixelRatioCap: 0.9,
     shadows: false,
     shadowMapSize: 0,
     bloom: false,
-    fogDensity: 0.006,
-    cityChunkRadius: 30,
-    maxZombies: 12,
-    aiTickHz: 5,
+    fogDensity: 0.008,
+    cityChunkRadius: 22,
+    maxZombies: 8,
+    aiTickHz: 4,
     windowEmissivePerformance: true,
-    hemiIntensityMul: 1.15,
-    textureRepeatMul: 0.5,
+    hemiIntensityMul: 1.2,
+    textureRepeatMul: 0.4,
     trees: false,
-    cars: 0.25,
+    cars: 0.15,
     particles: false,
   },
   medium: {
     preset: 'medium',
-    pixelRatioCap: 1.5,
-    shadows: true,
-    shadowMapSize: 512,
-    bloom: true,
-    fogDensity: 0.0035,
-    cityChunkRadius: 60,
-    maxZombies: 32,
-    aiTickHz: 12,
-    windowEmissivePerformance: false,
-    hemiIntensityMul: 1.0,
-    textureRepeatMul: 0.75,
+    pixelRatioCap: 1.25,
+    shadows: false,
+    shadowMapSize: 0,
+    bloom: false,
+    fogDensity: 0.005,
+    cityChunkRadius: 36,
+    maxZombies: 18,
+    aiTickHz: 8,
+    windowEmissivePerformance: true,
+    hemiIntensityMul: 1.05,
+    textureRepeatMul: 0.6,
     trees: true,
-    cars: 0.7,
+    cars: 0.45,
     particles: true,
   },
   high: {
     preset: 'high',
-    pixelRatioCap: 2.0,
+    pixelRatioCap: 1.5,
     shadows: true,
-    shadowMapSize: 1024,
+    shadowMapSize: 512,
     bloom: true,
-    fogDensity: 0.0025,
-    cityChunkRadius: 90,
-    maxZombies: 56,
-    aiTickHz: 20,
+    fogDensity: 0.003,
+    cityChunkRadius: 56,
+    maxZombies: 32,
+    aiTickHz: 14,
     windowEmissivePerformance: false,
     hemiIntensityMul: 0.95,
     textureRepeatMul: 1,
     trees: true,
-    cars: 1,
+    cars: 0.8,
     particles: true,
   },
 };
@@ -94,12 +94,14 @@ export function detectInitialPreset(): QualityPreset {
   const screenArea = window.screen.width * window.screen.height;
 
   // Detect low-end mobile or weak desktop
-  if (isMobile && (cores <= 4 || memInt <= 2)) return 'low';
+  // Mobile is conservative by default — Android browsers struggle with our
+  // 600x600 streamed world; force LOW unless device is clearly mid-range.
+  if (isMobile && (cores <= 6 || memInt <= 3)) return 'low';
   if (isMobile) return 'medium';
   if (cores <= 2 || memInt <= 2) return 'low';
   if (cores >= 8 && memInt >= 8 && dpr >= 1.5 && screenArea > 1920 * 1080) return 'high';
-  if (cores >= 6 && memInt >= 4) return 'high';
-  return 'medium';
+  if (cores >= 6 && memInt >= 4) return 'medium';
+  return 'low';
 }
 
 export function getProfile(preset: QualityPreset): QualityProfile {

@@ -174,7 +174,7 @@ export default function CityScene() {
     let playerSkin: SkinnedInstance | null = null;
     let prevPlayerPosX = playerSpawn.x;
     let prevPlayerPosZ = playerSpawn.z;
-    if (profile.preset !== 'low') {
+    if (profile.preset === 'high') {
       loadCharacterTemplate()
         .then((template) => {
           playerSkin = spawnCharacterInstance(template);
@@ -231,7 +231,7 @@ export default function CityScene() {
 
     // Quaternius Zombie_Basic.glb — skinned visual, only on HIGH preset and
     // capped at MAX_SKIN_ZOMBIES so 50-bone skeleton updates stay affordable.
-    const MAX_SKIN_ZOMBIES = 8;
+    const MAX_SKIN_ZOMBIES = 5;
     let zombieTemplate: Awaited<ReturnType<typeof loadZombieTemplate>> | null = null;
     function attachSkinTo(z: ZombieInstance): void {
       if (!zombieTemplate || z.skin) return;
@@ -402,7 +402,7 @@ export default function CityScene() {
         const fps = (fpsFrames * 1000) / Math.max(1, fpsAccum);
         useGameStore.setState({ measuredFps: Math.round(fps) });
         fpsAccum = 0; fpsFrames = 0; fpsCheckT = now;
-        if (fps < 30) lowFpsStreak += 1; else lowFpsStreak = 0;
+        if (fps < 40) lowFpsStreak += 1; else lowFpsStreak = 0;
         if (lowFpsStreak >= 2 && degradeLevel < 3) {
           degradeLevel += 1;
           lowFpsStreak = 0;
