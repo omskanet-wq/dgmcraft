@@ -50,10 +50,23 @@ export function buildHouse(variant: number, seed: number): THREE.Group {
     if (((seed >> 4) & 1) === 1) wn.userData.lit = true;
     g.add(wn);
   }
-  // porch step
+  // porch step + railing posts
   const porch = new THREE.Mesh(sharedBox(2.0, 0.18, 0.8), basicMat(0x6a4a2a));
   porch.position.set(0, 0.09, d / 2 + 0.4);
   g.add(porch);
+  const postMat = sharedMat('porch-post', () => basicMat(0x4a3a26, 1));
+  for (const dx of [-1.0, 1.0]) {
+    const post = new THREE.Mesh(sharedBox(0.08, 1.4, 0.08), postMat);
+    post.position.set(dx, 0.7, d / 2 + 0.78); g.add(post);
+  }
+  const awning = new THREE.Mesh(sharedBox(2.4, 0.06, 1.0), basicMat(0x6a3024));
+  awning.position.set(0, 1.5, d / 2 + 0.4); g.add(awning);
+  // chimney
+  const chim = new THREE.Mesh(sharedBox(0.5, 1.0, 0.5), basicMat(0x6a4a3a));
+  chim.position.set(w / 2 - 0.6, h + 0.6, -d / 4); g.add(chim);
+  // mailbox
+  const mb = new THREE.Mesh(sharedBox(0.18, 0.18, 0.32), basicMat(0x4a4a4a, 0.5, 0.5));
+  mb.position.set(-w / 2 - 0.4, 0.9, d / 2 + 1.4); g.add(mb);
   return g;
 }
 
@@ -77,6 +90,15 @@ export function buildCottage(variant: number, seed: number): THREE.Group {
   const chim = new THREE.Mesh(sharedBox(0.4, 0.8, 0.4), basicMat(0x4a2a1a));
   chim.position.set(w / 3, h + 1.2, -d / 4);
   g.add(chim);
+  // log facade strakes (horizontal lines suggest stacked logs).
+  const logMat = sharedMat('cottage-log', () => basicMat(0x6a3a22, 1));
+  for (let y = 0.4; y < h - 0.2; y += 0.45) {
+    const ln = new THREE.Mesh(sharedBox(w + 0.04, 0.08, 0.02), logMat);
+    ln.position.set(0, y, d / 2 + 0.025); g.add(ln);
+  }
+  // small wooden door
+  const door = new THREE.Mesh(sharedBox(0.7, 1.4, 0.05), basicMat(0x3a1e10));
+  door.position.set(0, 0.7, d / 2 + 0.04); g.add(door);
   void seed;
   return g;
 }
@@ -122,6 +144,18 @@ export function buildWarehouse(variant: number): THREE.Group {
   const door = new THREE.Mesh(sharedBox(3.5, 3, 0.1), basicMat(0x4a4a4a));
   door.position.set(-w / 2 + 2.5, 1.5, d / 2 + 0.05);
   g.add(door);
+  // smokestack + roof vents
+  const stack = new THREE.Mesh(sharedCylinder(0.5, 0.6, 4, 12), basicMat(0x4a4a48, 0.7, 0.4));
+  stack.position.set(w / 2 - 1.5, h + 2 + 0.2, 0); g.add(stack);
+  const stackTop = new THREE.Mesh(sharedCylinder(0.55, 0.55, 0.2, 12), basicMat(0x2a2a2a));
+  stackTop.position.set(w / 2 - 1.5, h + 4.3, 0); g.add(stackTop);
+  for (let i = -1; i <= 1; i += 2) {
+    const vent = new THREE.Mesh(sharedBox(1.0, 0.8, 1.0), basicMat(0x6a6a66, 0.5, 0.5));
+    vent.position.set(i * w / 4, h + 1.0, 0); g.add(vent);
+  }
+  // signage panel above roller door
+  const sign = new THREE.Mesh(sharedPlane(3.6, 0.5), basicMat(0x9a3a2a));
+  sign.position.set(-w / 2 + 2.5, 3.4, d / 2 + 0.06); g.add(sign);
   return g;
 }
 
@@ -409,6 +443,20 @@ export function buildTower(variant: number, seed: number): THREE.Group {
   body.position.y = h / 2;
   body.castShadow = true; body.receiveShadow = true;
   g.add(body);
+  // ground floor signage panel + awning add visual variety to skyscrapers.
+  const signColors = [0xc23a3a, 0x3a8ac0, 0x6aa84a, 0xc8a83a, 0x9a4a8a];
+  const signMat = sharedMat(`tower-sign-${seed & 7}`, () =>
+    new THREE.MeshStandardMaterial({ color: signColors[seed % signColors.length], roughness: 0.6, emissive: 0x1a0a00, emissiveIntensity: 0.05 })
+  );
+  const sign = new THREE.Mesh(sharedPlane(w * 0.7, 0.7), signMat);
+  sign.position.set(0, 1.7, d / 2 + 0.02); g.add(sign);
+  const awning = new THREE.Mesh(sharedBox(w * 0.8, 0.06, 1.0), basicMat(0x2a2a2a, 0.6, 0.5));
+  awning.position.set(0, 1.05, d / 2 + 0.5); g.add(awning);
+  // rooftop water tank + antenna spire
+  const wt = new THREE.Mesh(sharedCylinder(1.0, 1.0, 1.2, 12), basicMat(0x6a6a66, 0.7, 0.4));
+  wt.position.set(-w / 4, h + 0.6, 0); g.add(wt);
+  const ant = new THREE.Mesh(sharedCylinder(0.04, 0.06, 3.0, 6), basicMat(0x2a2a2a, 0.5, 0.5));
+  ant.position.set(w / 4, h + 1.5, d / 4); g.add(ant);
   // window strip — single emissive plane per floor (cheap)
   const winMat = sharedMat('tower-window', () => new THREE.MeshStandardMaterial({
     color: 0x14181c, roughness: 0.2, metalness: 0.5,
@@ -451,6 +499,18 @@ export function buildMidrise(variant: number, seed: number): THREE.Group {
     const gap = new THREE.Mesh(sharedBox(w + 0.4, 0.6, d + 0.4), basicMat(0x14110a, 1));
     gap.position.y = h - 0.3;
     g.add(gap);
+  } else {
+    // balconies on alternating sides + rooftop AC unit
+    const balMat = basicMat(0x4a4a4a, 0.7, 0.4);
+    for (let f = 1; f < floors; f++) {
+      if ((f & 1) === 0) continue;
+      const bal = new THREE.Mesh(sharedBox(w * 0.6, 0.08, 0.6), balMat);
+      bal.position.set(0, f * 1.3, d / 2 + 0.3); g.add(bal);
+      const railing = new THREE.Mesh(sharedBox(w * 0.6, 0.5, 0.04), basicMat(0x2a2a2a, 0.5, 0.5));
+      railing.position.set(0, f * 1.3 + 0.25, d / 2 + 0.6); g.add(railing);
+    }
+    const ac = new THREE.Mesh(sharedBox(1.2, 0.6, 0.8), basicMat(0x9a9a96, 0.6, 0.4));
+    ac.position.set(w / 4, h + 0.3, -d / 4); g.add(ac);
   }
   return g;
 }

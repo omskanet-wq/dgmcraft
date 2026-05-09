@@ -514,3 +514,97 @@
   .craft-row { grid-template-columns: 1fr; gap: 6px; }
   .level-bar { display: none; }
 }
+
+/* ---------- Modal panels (settings, quests) ---------- */
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 80;
+  padding: 24px;
+}
+.modal-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  max-width: 92vw;
+  max-height: 88vh;
+  overflow: auto;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.modal-head h3 { margin: 0; font-size: 18px; letter-spacing: 0.5px; color: var(--accent); }
+
+.settings-section { padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.settings-section:first-of-type { border-top: 0; }
+.settings-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 0;
+  font-size: 14px;
+}
+.settings-row > span:first-child { flex: 1; color: var(--text); }
+.settings-row input[type="range"] { flex: 1.5; accent-color: var(--accent); }
+.settings-val { color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+.settings-hint { color: var(--text-dim); font-size: 12px; margin: 4px 0 0 0; }
+.seg { display: inline-flex; gap: 4px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: rgba(0,0,0,0.25); }
+.seg-btn {
+  background: transparent; color: var(--text-dim);
+  border: 0; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.seg-btn.on { background: var(--accent); color: #1a0c00; }
+.seg-btn:hover:not(.on) { background: rgba(255,255,255,0.05); }
+
+.fps-readout {
+  position: fixed; left: 12px; bottom: 12px;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid var(--line-soft);
+  padding: 4px 8px; border-radius: 6px;
+  font-size: 11px; color: var(--good);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 70;
+}
+
+.quest-list { display: flex; flex-direction: column; gap: 10px; }
+.quest-card {
+  background: rgba(0,0,0,0.32);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.quest-card.done { border-color: var(--good); }
+.quest-card.claimed { opacity: 0.55; }
+.quest-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.quest-title { font-weight: 600; color: var(--text); }
+.quest-count { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.quest-badge { color: var(--good); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.quest-desc { color: var(--text-dim); font-size: 13px; margin: 4px 0 6px; }
+.quest-bar { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+.quest-fill { height: 100%; background: var(--accent); transition: width 200ms ease; }
+.quest-rewards { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+.quest-reward { color: var(--text); }
+
+/* ---------- Combat HUD: combo + crosshair ---------- */
+.combo-readout {
+  position: fixed; right: 16px; top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0,0,0,0.5);
+  border: 1px solid var(--accent);
+  padding: 6px 12px; border-radius: 8px;
+  font-size: 14px; color: var(--accent-soft);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  z-index: 60;
+  animation: combo-pop 200ms ease-out;
+}
+@keyframes combo-pop {
+  from { transform: translateY(-50%) scale(1.18); }
+  to { transform: translateY(-50%) scale(1); }
+}

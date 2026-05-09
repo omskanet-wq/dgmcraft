@@ -4,6 +4,9 @@ import { ITEMS, RARITY_COLOR } from '../game/items';
 import Inventory from './Inventory';
 import Crafting from './Crafting';
 import Minimap from './Minimap';
+import Settings from './Settings';
+import Quests from './Quests';
+import { t } from '../utils/i18n';
 
 export default function HUD() {
   const player = useGameStore((s) => s.player);
@@ -15,6 +18,12 @@ export default function HUD() {
   const setToast = useGameStore((s) => s.setToast);
   const [showInv, setShowInv] = useState(false);
   const [showCraft, setShowCraft] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showQuests, setShowQuests] = useState(false);
+  const showFps = useGameStore((s) => s.showFps);
+  const fps = useGameStore((s) => s.measuredFps);
+  const quests = useGameStore((s) => s.quests);
+  const pendingClaims = quests.filter((q) => q.done && !q.claimed).length;
 
   const weapon = player.equipped.weapon;
   const weaponDef = weapon ? ITEMS[weapon] : null;
@@ -36,10 +45,10 @@ export default function HUD() {
     <div className="hud-root">
       {/* Top-left: survival meters */}
       <div className="meters">
-        <Meter label="HP" value={player.hp} max={player.hpMax} color="#d65a5a" icon="❤" />
-        <Meter label="HUNGER" value={player.hunger} max={player.hungerMax} color="#d68a3a" icon="🍖" />
-        <Meter label="THIRST" value={player.thirst} max={player.thirstMax} color="#3a8ad6" icon="💧" />
-        <Meter label="STAMINA" value={player.stamina} max={player.staminaMax} color="#5fcf6e" icon="⚡" />
+        <Meter label={t('meter.hp')} value={player.hp} max={player.hpMax} color="#d65a5a" icon="❤" />
+        <Meter label={t('meter.hunger')} value={player.hunger} max={player.hungerMax} color="#d68a3a" icon="🍖" />
+        <Meter label={t('meter.thirst')} value={player.thirst} max={player.thirstMax} color="#3a8ad6" icon="💧" />
+        <Meter label={t('meter.stamina')} value={player.stamina} max={player.staminaMax} color="#5fcf6e" icon="⚡" />
       </div>
 
       {/* Top-right: clock + minimap (city only) */}
@@ -48,14 +57,14 @@ export default function HUD() {
           <div className={`clock-time${night ? ' night' : ''}`}>
             {night ? '🌙' : '☀'} {time}
           </div>
-          <div className="clock-day">DAY {dayCount}</div>
+          <div className="clock-day">{t('time.day')} {dayCount}</div>
         </div>
         {screen === 'city' && <Minimap />}
       </div>
 
       {/* Top-center: level + XP + counters */}
       <div className="level-bar">
-        <span className="lvl-num">LV {player.level}</span>
+        <span className="lvl-num">УР {player.level}</span>
         <div className="xp-bar">
           <div className="xp-fill" style={{ width: `${(player.xp / (player.level * 100)) * 100}%` }} />
         </div>
@@ -98,24 +107,32 @@ export default function HUD() {
           <span className="weapon-icon">{weaponDef?.icon ?? '👊'}</span>
           <div className="weapon-meta">
             <div className="weapon-name" style={{ color: weaponDef ? RARITY_COLOR[weaponDef.rarity] : '#cfcfcf' }}>
-              {weaponDef?.name ?? 'Unarmed'}
+              {weaponDef?.name ?? t('combat.unarmed')}
             </div>
             <div className="weapon-stats">
-              {weaponDef ? `DMG ${weaponDef.damage} · RNG ${weaponDef.range}${weaponDef.ranged ? ' · RANGED' : ''}` : 'Find a weapon.'}
+              {weaponDef ? `${t('combat.dmg')} ${weaponDef.damage} · ${t('combat.range')} ${weaponDef.range}${weaponDef.ranged ? ' · ' + t('combat.ranged') : ''}` : t('combat.find_weapon')}
             </div>
           </div>
         </div>
         <div className="action-row">
-          <button className="btn small" onClick={() => setShowInv(true)}>Bag (I)</button>
-          <button className="btn small" onClick={() => setShowCraft(true)}>Craft (C)</button>
-          {screen === 'city' && <button className="btn small" onClick={() => setScreen('bastion')}>Bastion (B)</button>}
-          {screen === 'bastion' && <button className="btn small" onClick={() => setScreen('city')}>City (B)</button>}
-          <button className="btn small ghost" onClick={() => setScreen('menu')}>Menu</button>
+          <button className="btn small" onClick={() => setShowInv(true)}>{t('btn.bag')}</button>
+          <button className="btn small" onClick={() => setShowCraft(true)}>{t('btn.craft')}</button>
+          {screen === 'city' && <button className="btn small" onClick={() => setScreen('bastion')}>{t('btn.bastion')}</button>}
+          {screen === 'bastion' && <button className="btn small" onClick={() => setScreen('city')}>{t('btn.city')}</button>}
+          <button className="btn small" onClick={() => setShowQuests(true)}>
+            {t('btn.tasks')}{pendingClaims > 0 ? ` (${pendingClaims}!)` : ''}
+          </button>
+          <button className="btn small ghost" onClick={() => setShowSettings(true)} title={t('btn.settings')}>⚙</button>
+          <button className="btn small ghost" onClick={() => setScreen('menu')}>{t('btn.menu')}</button>
         </div>
       </div>
 
+      {showFps && <div className="fps-readout">{fps} FPS</div>}
+
       {showInv && <Inventory onClose={() => setShowInv(false)} />}
       {showCraft && <Crafting onClose={() => setShowCraft(false)} />}
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showQuests && <Quests onClose={() => setShowQuests(false)} />}
 
       {toast && (
         <div className="toast" onAnimationEnd={() => setToast(null)}>{toast}</div>

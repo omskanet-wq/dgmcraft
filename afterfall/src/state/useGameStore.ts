@@ -4,6 +4,12 @@ import { ITEMS } from '../game/items';
 import type { BuildingId } from '../game/buildings';
 import { BUILDINGS } from '../game/buildings';
 import { detectInitialPreset, persistPreset, type QualityPreset } from '../utils/quality';
+import { QUESTS, makeInitialProgress, type QuestProgress } from '../game/quests';
+import { loadSave, writeSave, clearSave, type SavePayload } from '../utils/persistence';
+import {
+  setMasterVolume, setMuted, sfxLevelUp, sfxQuestComplete,
+} from '../utils/audio';
+import { t } from '../utils/i18n';
 
 export type Screen = 'menu' | 'city' | 'bastion';
 
@@ -76,8 +82,30 @@ interface GameState {
 
   kills: number;
   loot: number;
+  containersOpened: number;
+  nightsSurvived: number;
   addKill: () => void;
   addLoot: (n?: number) => void;
+  addContainerOpened: () => void;
+
+  // Quests
+  quests: QuestProgress[];
+  claimQuest: (id: string) => void;
+
+  // Audio settings
+  audioVolume: number;
+  audioMuted: boolean;
+  setAudioVolume: (v: number) => void;
+  setAudioMuted: (m: boolean) => void;
+
+  // FPS counter visibility
+  showFps: boolean;
+  setShowFps: (b: boolean) => void;
+
+  // Save / load
+  saveGame: () => void;
+  loadGame: () => boolean;
+  resetSave: () => void;
 }
 
 let buildingUid = 1;
@@ -115,8 +143,72 @@ export const useGameStore = create<GameState>((set, get) => ({
   measuredFps: 60,
   kills: 0,
   loot: 0,
-  addKill: () => set((st) => ({ kills: st.kills + 1 })),
+  containersOpened: 0,
+  nightsSurvived: 0,
+  addKill: () => {
+    const st = get();
+    const kills = st.kills + 1;
+    set({ kills });
+    advanceQuest(get, set, 'kill_zombies', 1);
+  },
   addLoot: (n = 1) => set((st) => ({ loot: st.loot + n })),
+  addContainerOpened: () => {
+    const st = get();
+    set({ containersOpened: st.containersOpened + 1 });
+    advanceQuest(get, set, 'loot_containers', 1);
+  },
+
+  quests: makeInitialProgress(),
+  claimQuest: (id) => {
+    const st = get();
+    const q = st.quests.find((p) => p.id === id);
+    if (!q || !q.done || q.claimed) return;
+    const def = QUESTS.find((d) => d.id === id);
+    if (!def) return;
+    get().gainXP(def.rewardXp);
+    for (const r of def.rewardItems) get().addItem(r.item, r.qty);
+    set({
+      quests: get().quests.map((p) => p.id === id ? { ...p, claimed: true } : p),
+      toast: t('toast.reward_claimed', { title: t(`q.${def.id}.title`) }),
+    });
+    sfxQuestComplete();
+  },
+
+  audioVolume: 0.6,
+  audioMuted: false,
+  setAudioVolume: (v) => { setMasterVolume(v); set({ audioVolume: v }); },
+  setAudioMuted: (m) => { setMuted(m); set({ audioMuted: m }); },
+  showFps: false,
+  setShowFps: (b) => set({ showFps: b }),
+
+  saveGame: () => {
+    const st = get();
+    const payload: SavePayload = {
+      version: 1, savedAt: Date.now(),
+      player: st.player, buildings: st.buildings,
+      worldTime: st.worldTime, dayCount: st.dayCount,
+      kills: st.kills, loot: st.loot, quests: st.quests,
+      audio: { volume: st.audioVolume, muted: st.audioMuted },
+      quality: st.quality,
+    };
+    writeSave(payload);
+  },
+  loadGame: () => {
+    const save = loadSave();
+    if (!save) return false;
+    setMasterVolume(save.audio.volume);
+    setMuted(save.audio.muted);
+    set({
+      player: save.player, buildings: save.buildings,
+      worldTime: save.worldTime, dayCount: save.dayCount,
+      kills: save.kills, loot: save.loot, quests: save.quests,
+      audioVolume: save.audio.volume, audioMuted: save.audio.muted,
+      quality: save.quality,
+      toast: `Loaded save from ${new Date(save.savedAt).toLocaleString()}`,
+    });
+    return true;
+  },
+  resetSave: () => { clearSave(); set({ toast: t('toast.save_cleared') }); },
 
   setScreen: (s) => set({ screen: s, paused: false }),
   setPaused: (p) => set({ paused: p }),
@@ -219,15 +311,18 @@ export const useGameStore = create<GameState>((set, get) => ({
     let xp = st.player.xp + n;
     let level = st.player.level;
     let hpMax = st.player.hpMax;
+    let leveled = false;
     while (xp >= level * 100) {
       xp -= level * 100;
       level += 1;
       hpMax += 10;
+      leveled = true;
     }
+    if (leveled) sfxLevelUp();
     return {
       player: {
         ...st.player, xp, level, hpMax,
-        hp: level !== st.player.level ? hpMax : st.player.hp,
+        hp: leveled ? hpMax : st.player.hp,
       },
     };
   }),
@@ -239,7 +334,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     for (const [k, v] of Object.entries(def.costs)) {
       const total = st.player.inventory.filter((s) => s.item === k).reduce((sum, s) => sum + s.qty, 0);
       if (total < v) {
-        set({ toast: 'Missing materials.' });
+        set({ toast: t('toast.missing_materials') });
         return false;
       }
     }
@@ -247,7 +342,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     for (const b of st.buildings) {
       const bdef = BUILDINGS[b.building];
       if (rectsOverlap(x, z, def.size, b.x, b.z, bdef.size)) {
-        set({ toast: 'Tile is occupied.' });
+        set({ toast: t('toast.tile_occupied') });
         return false;
       }
     }
@@ -259,7 +354,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       builtAt: performance.now() + 1500,
       underConstruction: true,
     };
-    set((s) => ({ buildings: [...s.buildings, placed], toast: `${def.name} placed.` }));
+    set((s) => ({ buildings: [...s.buildings, placed], toast: t('toast.placed', { name: def.name }) }));
+    advanceQuest(get, set, 'place_buildings', 1);
     return true;
   },
 
@@ -281,7 +377,13 @@ export const useGameStore = create<GameState>((set, get) => ({
     const wasNight = isNight(st.worldTime);
     const nowNight = isNight(wt);
     if (wasNight !== nowNight) {
-      set({ toast: nowNight ? `Night falls — they wake up.` : `Dawn breaks — push out.` });
+      set({ toast: nowNight ? t('time.nightfall') : t('time.dayfall') });
+      // Count "night survived" on dawn transition (i.e. when leaving night).
+      if (!nowNight && wasNight) {
+        const ns = st.nightsSurvived + 1;
+        set({ nightsSurvived: ns });
+        advanceQuest(get, set, 'survive_nights', 1);
+      }
     }
     set({ worldTime: wt, dayCount: dc });
     // Construction completion
@@ -310,6 +412,30 @@ export const useGameStore = create<GameState>((set, get) => ({
 
 function rectsOverlap(ax: number, az: number, asz: number, bx: number, bz: number, bsz: number): boolean {
   return ax < bx + bsz && ax + asz > bx && az < bz + bsz && az + asz > bz;
+}
+
+type GetFn = () => GameState;
+type SetFn = (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void;
+
+/**
+ * Advance the active progress for any quests whose goal kind matches.
+ * Marks `done = true` on completion so the HUD can offer a Claim button.
+ */
+function advanceQuest(get: GetFn, set: SetFn, kind: string, by: number): void {
+  const st = get();
+  let toastForCompletion: string | null = null;
+  const next = st.quests.map((p) => {
+    if (p.done) return p;
+    const def = QUESTS.find((d) => d.id === p.id);
+    if (!def || def.goal.kind !== kind) return p;
+    const need = (def.goal as { need: number }).need;
+    const count = Math.min(need, p.count + by);
+    const done = count >= need;
+    if (done && !p.done) toastForCompletion = t(`q.${def.id}.title`);
+    return { ...p, count, done };
+  });
+  set({ quests: next });
+  if (toastForCompletion) set({ toast: t('toast.quest_complete', { title: toastForCompletion }) });
 }
 
 /** Returns true if the world is in night phase (low light, more aggressive zombies). */

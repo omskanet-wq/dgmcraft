@@ -1,8 +1,15 @@
 import { useGameStore } from '../state/useGameStore';
 import { ITEMS, RARITY_COLOR } from '../game/items';
 import type { ItemSlot } from '../game/items';
+import { getLocale } from '../utils/i18n';
 
-const EQUIP_SLOTS: { slot: ItemSlot; label: string }[] = [
+const EQUIP_SLOTS_RU: { slot: ItemSlot; label: string }[] = [
+  { slot: 'helmet', label: 'Голова' },
+  { slot: 'armor', label: 'Тело' },
+  { slot: 'weapon', label: 'Оружие' },
+  { slot: 'tool', label: 'Инструмент' },
+];
+const EQUIP_SLOTS_EN: { slot: ItemSlot; label: string }[] = [
   { slot: 'helmet', label: 'Head' },
   { slot: 'armor', label: 'Body' },
   { slot: 'weapon', label: 'Weapon' },
@@ -19,13 +26,13 @@ export default function Inventory({ onClose }: { onClose: () => void }) {
     <div className="modal-overlay hud-clickable" onClick={onClose}>
       <div className="modal inv-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>The Bag</h2>
-          <button className="btn ghost" onClick={onClose}>Close (Esc)</button>
+          <h2>{getLocale() === 'ru' ? 'Сумка' : 'The Bag'}</h2>
+          <button className="btn ghost" onClick={onClose}>{getLocale() === 'ru' ? 'Закрыть (Esc)' : 'Close (Esc)'}</button>
         </div>
         <div className="inv-grid">
           <div className="equip-panel">
-            <div className="equip-title">Equipped</div>
-            {EQUIP_SLOTS.map(({ slot, label }) => {
+            <div className="equip-title">{getLocale() === 'ru' ? 'Экипировка' : 'Equipped'}</div>
+            {(getLocale() === 'ru' ? EQUIP_SLOTS_RU : EQUIP_SLOTS_EN).map(({ slot, label }) => {
               const id = player.equipped[slot];
               const def = id ? ITEMS[id] : null;
               return (
@@ -41,7 +48,7 @@ export default function Inventory({ onClose }: { onClose: () => void }) {
                       <span className="equip-name">{def.name}</span>
                     </button>
                   ) : (
-                    <div className="equip-slot empty">empty</div>
+                    <div className="equip-slot empty">{getLocale() === 'ru' ? 'пусто' : 'empty'}</div>
                   )}
                 </div>
               );
@@ -78,7 +85,7 @@ export default function Inventory({ onClose }: { onClose: () => void }) {
                 );
               })}
               {player.inventory.length === 0 && (
-                <div className="bag-empty">Bag is empty. Smash some lockers and dumpsters out there.</div>
+                <div className="bag-empty">{getLocale() === 'ru' ? 'Сумка пуста. Разбей шкафы и мусорки.' : 'Bag is empty. Smash some lockers and dumpsters out there.'}</div>
               )}
             </div>
           </div>

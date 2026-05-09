@@ -14,6 +14,10 @@ import { makeRenderer, makeRenderTarget } from '../utils/post';
 import { spawnDamage, spawnPickup, tickHud } from '../utils/hud';
 import { spawnBurst, tickParticles, disposeParticles } from '../utils/particles';
 import { getProfile } from '../utils/quality';
+import {
+  resumeAudio, sfxFootstep, sfxAttack, sfxHit, sfxZombieGroan,
+  sfxContainerOpen, sfxPlayerHurt, startAmbientWind, stopAmbientWind, setAmbientNight,
+} from '../utils/audio';
 import HUD from '../ui/HUD';
 
 import type { HumanoidBones } from '../game/models';
@@ -27,6 +31,17 @@ interface ZombieInstance {
   cooldown: number;
   wanderTimer: number;
   uid: number;
+  // Combat reactions: per-zombie knockback velocity + flinch timer.
+  knockX: number;
+  knockZ: number;
+  flinchT: number;
+}
+
+interface Projectile {
+  mesh: THREE.Mesh;
+  vel: THREE.Vector3;
+  life: number;
+  damage: number;
 }
 
 let zid = 1;
@@ -197,6 +212,7 @@ export default function CityScene() {
       const zi: ZombieInstance = {
         def, group: g, hp: def.hp, state: 'wander', cooldown: 0,
         target: p.clone(), wanderTimer: 0, uid: zid++,
+        knockX: 0, knockZ: 0, flinchT: 0,
       };
       zombies.push(zi);
       return zi;
@@ -211,6 +227,11 @@ export default function CityScene() {
     let attackTarget: ZombieInstance | null = null;
     let attackCd = 0;
     let attackSwing = 0; // seconds of remaining attack-arm animation
+
+    // Combat: live projectiles + combo counter.
+    const projectiles: Projectile[] = [];
+    let comboCount = 0;
+    let comboT = 0; // seconds since last hit; reset to 0 on hit, clears combo at >2.5s
 
     // Joystick state
     let joystick = { active: false, x: 0, y: 0, baseX: 0, baseY: 0 };
@@ -310,6 +331,21 @@ export default function CityScene() {
     let fpsAccum = 0; let fpsFrames = 0; let fpsCheckT = 0;
     let lowFpsStreak = 0;
     let degradeLevel = 0; // 0 = normal, 1 = shadows off, 2 = lower zombie cap, 3 = pixel ratio dropped
+
+    // Audio bootstrap: lazy-resume on first user gesture; start an ambient wind
+    // bed once and let setAmbientNight modulate intensity by day/night.
+    const onFirstGesture = () => {
+      resumeAudio();
+      startAmbientWind();
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
+    };
+    window.addEventListener('pointerdown', onFirstGesture);
+    window.addEventListener('keydown', onFirstGesture);
+
+    // Footstep stride accumulator (distance-based so sprint produces more taps).
+    let stepDist = 0;
+    let savedAt = performance.now();
     function frame() {
       if (stop) return;
       const now = performance.now();
@@ -436,6 +472,24 @@ export default function CityScene() {
       if (sprintWanted && movDir > 0.01) useGameStore.getState().modStamina(-12 * dt);
       setPlayerPos(player.position.x, player.position.z);
 
+      // Distance-based footstep clicks. Stride length ~1.6m at walk, ~1.2m at sprint.
+      if (movDir > 0.01) {
+        stepDist += movDir;
+        const stride = sprintWanted ? 1.2 : 1.6;
+        if (stepDist >= stride) { stepDist = 0; sfxFootstep(sprintWanted); }
+      } else {
+        stepDist = 0;
+      }
+
+      // Modulate the ambient wind by day/night and toggle audio mute when settings change.
+      setAmbientNight(isNight(useGameStore.getState().worldTime) ? 1 : 0);
+
+      // Autosave every 30s (saves the current state to localStorage).
+      if (now - savedAt > 30000) {
+        savedAt = now;
+        useGameStore.getState().saveGame?.();
+      }
+
       // Animation update path differs depending on whether the high-fidelity
       // skinned model has finished loading.
       if (playerSkin) {
@@ -527,10 +581,21 @@ export default function CityScene() {
       // Per-frame motion + attacks (interpolated, smooth)
       const aggroBoost = night ? 1.6 : 1.0;
       for (const z of zombies) {
+        // Apply knockback (damped) before normal motion so we can be pushed
+        // through the chase target temporarily.
+        if (Math.abs(z.knockX) > 0.001 || Math.abs(z.knockZ) > 0.001) {
+          z.group.position.x += z.knockX * dt;
+          z.group.position.z += z.knockZ * dt;
+          const damp = Math.exp(-dt * 8);
+          z.knockX *= damp; z.knockZ *= damp;
+        }
+        z.flinchT = Math.max(0, z.flinchT - dt);
+        const flinching = z.flinchT > 0;
+
         const dir = tmpVec.subVectors(z.target, z.group.position).setY(0);
         const len = dir.length();
         let moving = false;
-        if (len > 0.05) {
+        if (!flinching && len > 0.05) {
           dir.normalize();
           const sp = (z.state === 'chase' ? z.def.speed * (night ? 1.2 : 1) : z.def.speed * 0.4);
           z.group.position.addScaledVector(dir, sp * dt);
@@ -542,23 +607,65 @@ export default function CityScene() {
         const swing = moving ? Math.sin(phase) * 0.55 : 0;
         const swingArmL = moving ? Math.sin(phase + Math.PI) * 0.35 : 0;
         const b = z.group.bones;
-        b.legL.rotation.x = swing;
-        b.legR.rotation.x = -swing;
-        // Zombie arms have a baseline forward rotation (-0.4 / -0.6) — modulate around it.
-        b.armL.rotation.x = -0.4 + swingArmL;
-        b.armR.rotation.x = -0.6 - swingArmL;
-        // Slight torso bob
+        if (flinching) {
+          // Flinch pose — head and torso jerk back, arms fling out.
+          const ft = z.flinchT / 0.25;
+          b.torso.rotation.x = -0.4 * ft;
+          b.head.rotation.x = -0.6 * ft;
+          b.armL.rotation.x = -1.2;
+          b.armR.rotation.x = -1.2;
+          b.legL.rotation.x = 0;
+          b.legR.rotation.x = 0;
+        } else {
+          b.torso.rotation.x = 0;
+          b.head.rotation.x = 0;
+          b.legL.rotation.x = swing;
+          b.legR.rotation.x = -swing;
+          b.armL.rotation.x = -0.4 + swingArmL;
+          b.armR.rotation.x = -0.6 - swingArmL;
+        }
         z.group.position.y = moving ? Math.abs(Math.sin(phase)) * 0.04 : 0;
-        z.group.rotation.z = moving ? Math.sin(phase * 1.3) * 0.03 : 0;
+        z.group.rotation.z = moving && !flinching ? Math.sin(phase * 1.3) * 0.03 : 0;
+        // Stochastic moan: ~one zombie per second total starts a 0.7s groan.
+        if (Math.random() < dt * 0.5 / zombies.length && z.state === 'chase') sfxZombieGroan();
         const distToPlayer = z.group.position.distanceTo(player.position);
-        if (distToPlayer < 1.4 && z.cooldown <= 0 && z.state === 'chase') {
+        if (distToPlayer < 1.4 && z.cooldown <= 0 && z.state === 'chase' && !flinching) {
           useGameStore.getState().damagePlayer(z.def.damage * 0.4);
           spawnDamage(player.position.clone().add(new THREE.Vector3(0, 1.5, 0)), z.def.damage * 0.4, '#ff6a6a');
           spawnBurst(scene, player.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 6, [0.85, 0.18, 0.18], 2.4);
+          sfxPlayerHurt();
           z.cooldown = 1.0;
           void aggroBoost;
         }
       }
+
+      // Update live projectiles (arrows / bullets fired from ranged weapons).
+      for (let i = projectiles.length - 1; i >= 0; i--) {
+        const pr = projectiles[i];
+        pr.life -= dt;
+        pr.mesh.position.addScaledVector(pr.vel, dt);
+        let consumed = pr.life <= 0;
+        if (!consumed) {
+          for (const z of zombies) {
+            if (pr.mesh.position.distanceTo(z.group.position) < 1.0) {
+              applyHit(z, pr.damage, pr.vel.x * 0.3, pr.vel.z * 0.3);
+              consumed = true;
+              break;
+            }
+          }
+        }
+        if (consumed) {
+          scene.remove(pr.mesh);
+          (pr.mesh.geometry as THREE.BufferGeometry).dispose();
+          (pr.mesh.material as THREE.Material).dispose();
+          projectiles.splice(i, 1);
+        }
+      }
+
+      // Combo decay
+      comboT += dt;
+      if (comboT > 2.5 && comboCount > 0) comboCount = 0;
+      (window as unknown as { __afterfallCombo?: number }).__afterfallCombo = comboCount;
 
       // Player attacks
       attackCd = Math.max(0, attackCd - dt);
@@ -570,40 +677,81 @@ export default function CityScene() {
       }
       const wId = useGameStore.getState().player.equipped.weapon ?? 'fists';
       const w = ITEMS[wId];
-      if (attackPressed && attackTarget && attackCd === 0) {
+      // Auto-fire when target is in range and cooldown elapsed.
+      if (attackTarget && attackCd === 0) {
         const dToTarget = attackTarget.group.position.distanceTo(player.position);
         const reach = w.range ?? 1.2;
-        if (dToTarget <= reach) {
-          attackTarget.hp -= w.damage ?? 5;
-          spawnDamage(attackTarget.group.position.clone().add(new THREE.Vector3(0, 1.6, 0)), w.damage ?? 5, '#ffce6a');
-          spawnBurst(scene, attackTarget.group.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 10, [0.78, 0.12, 0.12], 3.2);
-          attackCd = w.ranged ? 0.4 : 0.7;
-          attackSwing = 0.35;
-          if (attackTarget.hp <= 0) {
-            for (const lr of attackTarget.def.loot) {
-              if (Math.random() < lr.chance) {
-                const q = Math.floor(Math.random() * (lr.qty[1] - lr.qty[0] + 1)) + lr.qty[0];
-                useGameStore.getState().addItem(lr.item, q);
-                const def = ITEMS[lr.item];
-                spawnPickup(attackTarget.group.position.clone().add(new THREE.Vector3(0, 1.5, 0)),
-                  `+${q} ${def.name}`, RARITY_COLOR[def.rarity]);
-              }
+        if (dToTarget <= reach + (w.ranged ? 14 : 0)) attackPressed = true;
+      }
+      if (attackPressed && attackCd === 0) {
+        const dmg = w.damage ?? 5;
+        if (w.ranged) {
+          // Projectile fired forward from the player's facing.
+          const fwd = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+          const geo = new THREE.CylinderGeometry(0.04, 0.04, 0.5, 8);
+          geo.rotateX(Math.PI / 2);
+          const mat = new THREE.MeshBasicMaterial({ color: 0xffd070 });
+          const m = new THREE.Mesh(geo, mat);
+          m.position.copy(player.position).add(new THREE.Vector3(0, 1.0, 0)).addScaledVector(fwd, 0.6);
+          m.lookAt(m.position.clone().add(fwd));
+          scene.add(m);
+          projectiles.push({ mesh: m, vel: fwd.clone().multiplyScalar(28), life: 1.2, damage: dmg });
+          attackCd = 0.4;
+          attackSwing = 0.25;
+          sfxAttack('ranged');
+        } else if (attackTarget) {
+          const dToTarget = attackTarget.group.position.distanceTo(player.position);
+          const reach = w.range ?? 1.2;
+          if (dToTarget <= reach) {
+            // AOE arc: melee swing also damages other zombies in front of the
+            // player within reach × 1.4. Damage to splash targets is halved.
+            sfxAttack('melee');
+            const fwd = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+            for (const z of zombies) {
+              const toZ = tmpVec.subVectors(z.group.position, player.position).setY(0);
+              const d = toZ.length();
+              if (d > reach * 1.4) continue;
+              toZ.normalize();
+              const dot = toZ.dot(fwd);
+              if (dot < 0.2) continue; // behind / to the side
+              const isPrimary = z === attackTarget;
+              const useDmg = isPrimary ? dmg : Math.round(dmg * 0.6);
+              applyHit(z, useDmg, toZ.x * 6, toZ.z * 6);
             }
-            useGameStore.getState().gainXP(attackTarget.def.xp);
-            useGameStore.getState().addKill();
-            scene.remove(attackTarget.group);
-            disposeGroup(attackTarget.group);
-            const idx = zombies.indexOf(attackTarget);
-            if (idx >= 0) zombies.splice(idx, 1);
-            attackTarget = null;
+            attackCd = 0.7;
+            attackSwing = 0.35;
           }
         }
         attackPressed = false;
       }
-      if (attackTarget && attackCd === 0) {
-        const dToTarget = attackTarget.group.position.distanceTo(player.position);
-        const reach = w.range ?? 1.2;
-        if (dToTarget <= reach) attackPressed = true;
+
+      function applyHit(z: ZombieInstance, damage: number, kx: number, kz: number): void {
+        z.hp -= damage;
+        z.knockX += kx; z.knockZ += kz;
+        z.flinchT = 0.25;
+        spawnDamage(z.group.position.clone().add(new THREE.Vector3(0, 1.6, 0)), damage, '#ffce6a');
+        spawnBurst(scene, z.group.position.clone().add(new THREE.Vector3(0, 1.0, 0)), 10, [0.78, 0.12, 0.12], 3.2);
+        sfxHit();
+        comboCount += 1;
+        comboT = 0;
+        if (z.hp <= 0) {
+          for (const lr of z.def.loot) {
+            if (Math.random() < lr.chance) {
+              const q = Math.floor(Math.random() * (lr.qty[1] - lr.qty[0] + 1)) + lr.qty[0];
+              useGameStore.getState().addItem(lr.item, q);
+              const def = ITEMS[lr.item];
+              spawnPickup(z.group.position.clone().add(new THREE.Vector3(0, 1.5, 0)),
+                `+${q} ${def.name}`, RARITY_COLOR[def.rarity]);
+            }
+          }
+          useGameStore.getState().gainXP(z.def.xp);
+          useGameStore.getState().addKill();
+          scene.remove(z.group);
+          disposeGroup(z.group);
+          const idx = zombies.indexOf(z);
+          if (idx >= 0) zombies.splice(idx, 1);
+          if (attackTarget === z) attackTarget = null;
+        }
       }
 
       tickHud(camera, dt);
@@ -615,6 +763,8 @@ export default function CityScene() {
 
     function openContainer(cont: LiveContainer) {
       cont.opened = true;
+      sfxContainerOpen();
+      useGameStore.getState().addContainerOpened?.();
       const rng = (() => {
         let s = (cont.pos.x * 1009 + cont.pos.z * 9973) >>> 0;
         return () => {
@@ -653,6 +803,9 @@ export default function CityScene() {
     return () => {
       stop = true;
       cancelAnimationFrame(raf);
+      stopAmbientWind();
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
